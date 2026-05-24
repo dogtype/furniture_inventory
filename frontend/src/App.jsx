@@ -137,18 +137,23 @@ export default function App() {
     setForm({ ...form, [e.target.name]: e.target.value });
   }
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    const result = await createFurniture({ ...form, price: Number(form.price), tags: formTags });
-    if (formImage && result.id) {
-      await uploadImage(result.id, formImage);
-    }
+  function clearForm() {
     setForm({ name: "", category: "", location: "", price: "" });
     setFormImage(null);
     setFormTags([]);
     setTagInput("");
     formFileRef.current.value = "";
-    load();
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    try {
+      const result = await createFurniture({ ...form, price: Number(form.price), tags: formTags });
+      if (formImage && result.id) await uploadImage(result.id, formImage);
+    } finally {
+      clearForm();
+      load();
+    }
   }
 
   async function handleImport(e) {
@@ -168,7 +173,7 @@ export default function App() {
           if (data.image_url) await uploadImageFromUrl(result.id, data.image_url);
           setImportUrl("");
           setImportOpen(false);
-          setFormTags([]);
+          clearForm();
           load();
           return;
         }
@@ -489,19 +494,20 @@ export default function App() {
             return (
               <div
                 key={item.id}
+                data-card-id={item.id}
+                tabIndex={0}
                 style={{
                   background: "var(--bg)",
                   border: "1px solid var(--border)",
                   borderRadius: 16,
                   overflow: "hidden",
                   boxShadow: "var(--shadow)",
+                  outline: "none",
                 }}
               >
                 {/* IMAGE SLIDER */}
                 <div
-                  data-card-id={item.id}
-                  tabIndex={0}
-                  style={{ position: "relative", height: 156, background: "var(--code-bg)", overflow: "hidden", outline: "none" }}
+                  style={{ position: "relative", height: 156, background: "var(--code-bg)", overflow: "hidden" }}
                 >
                   {images.length > 0 ? (
                     <>
