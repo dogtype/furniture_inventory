@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getFurniture, createFurniture, deleteFurniture, updateFurniture, uploadImage, deleteImage, imageUrl } from "./api";
+import { getFurniture, createFurniture, deleteFurniture, updateFurniture, uploadImage, deleteImage, imageUrl, login, scrapeUrl } from "./api";
 
 function normalizeUrl(str) {
   const s = /^https?:\/\//i.test(str) ? str : `https://${str}`;
@@ -30,13 +30,67 @@ const overlayBtn = {
   lineHeight: 1,
 };
 
+function LoginPage({ onLogin }) {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      await login(password);
+      onLogin();
+    } catch {
+      setError("Falsches Passwort.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div style={{ minHeight: "100svh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ width: "100%", maxWidth: 400, padding: "0 32px" }}>
+        <div style={{ background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 20, padding: "48px 40px" }}>
+          <h1 style={{ textAlign: "center", margin: "0 0 16px", lineHeight: 1.2 }}>Julias<br />Interior Store</h1>
+          <p style={{ textAlign: "center", color: "var(--text)", fontSize: 15, margin: "0 0 40px" }}>Bitte Passwort eingeben</p>
+          <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <input
+              type="password"
+              placeholder="Passwort"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              autoFocus
+              style={{ ...field, fontSize: 15, padding: "12px 16px" }}
+            />
+            {error && <p style={{ color: "#ef4444", fontSize: 13, margin: 0, textAlign: "center" }}>{error}</p>}
+            <button
+              type="submit"
+              disabled={loading}
+              style={{ background: "var(--accent)", color: "#fff", border: "none", borderRadius: 10, padding: "13px", fontSize: 15, fontWeight: 600, cursor: loading ? "default" : "pointer", opacity: loading ? 0.7 : 1, marginTop: 4 }}
+            >
+              {loading ? "…" : "Anmelden"}
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const [authed, setAuthed] = useState(() => !!localStorage.getItem("auth_token"));
   const [items, setItems] = useState([]);
   const [form, setForm] = useState({ name: "", category: "", location: "", price: "" });
   const [uploading, setUploading] = useState(null);
   const [formImage, setFormImage] = useState(null);
   const [formTags, setFormTags] = useState([]);
   const [tagInput, setTagInput] = useState("");
+  const [importUrl, setImportUrl] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [editTagInput, setEditTagInput] = useState("");
@@ -48,7 +102,12 @@ export default function App() {
   const formFileRef = useRef(null);
   const uploadTargetId = useRef(null);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (authed) load();
+    const logout = () => setAuthed(false);
+    window.addEventListener("auth:logout", logout);
+    return () => window.removeEventListener("auth:logout", logout);
+  }, [authed]);
 
   async function load() {
     const data = await getFurniture();
@@ -71,6 +130,22 @@ export default function App() {
     setTagInput("");
     formFileRef.current.value = "";
     load();
+  }
+
+  async function handleImport(e) {
+    e.preventDefault();
+    setImporting(true);
+    setImportError("");
+    try {
+      const data = await scrapeUrl(importUrl);
+      setForm({ name: data.name, category: data.category, location: data.location, price: data.price || "" });
+      setImportUrl("");
+      setImportOpen(false);
+    } catch (err) {
+      setImportError(err.message);
+    } finally {
+      setImporting(false);
+    }
   }
 
   function addTag(raw, currentTags, setTags, setInput) {
@@ -168,6 +243,8 @@ export default function App() {
     setSliderIndices(prev => ({ ...prev, [itemId]: (current + delta + length) % length }));
   }
 
+  if (!authed) return <LoginPage onLogin={() => setAuthed(true)} />;
+
   return (
     <div style={{ minHeight: "100svh", background: "var(--bg)" }}>
       <input ref={fileInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleFileChange} />
@@ -180,17 +257,25 @@ export default function App() {
             {items.length} {items.length === 1 ? "item" : "items"} gespeichert
           </p>
         </div>
-        <div style={{ position: "relative", flexShrink: 0 }}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text)", opacity: 0.5, pointerEvents: "none" }}>
-            <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
-          </svg>
-          <input
-            type="text"
-            placeholder="Suchen…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            style={{ ...field, width: 220, paddingLeft: 36, fontSize: 14 }}
-          />
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexShrink: 0 }}>
+          <div style={{ position: "relative" }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text)", opacity: 0.5, pointerEvents: "none" }}>
+              <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+            </svg>
+            <input
+              type="text"
+              placeholder="Suchen…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{ ...field, width: 220, paddingLeft: 36, fontSize: 14 }}
+            />
+          </div>
+          <button
+            onClick={() => { localStorage.removeItem("auth_token"); setAuthed(false); }}
+            style={{ fontSize: 13, background: "transparent", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 14px", cursor: "pointer", whiteSpace: "nowrap" }}
+          >
+            Abmelden
+          </button>
         </div>
       </header>
 
@@ -198,7 +283,37 @@ export default function App() {
 
         {/* FORM */}
         <div style={{ background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 16, padding: 24, marginBottom: 40 }}>
-          <h2 style={{ marginBottom: 16 }}>Interior Item hinzufügen</h2>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+            <h2 style={{ margin: 0 }}>Interior Item hinzufügen</h2>
+            <button
+              type="button"
+              onClick={() => { setImportOpen(o => !o); setImportError(""); }}
+              style={{ fontSize: 13, fontWeight: 600, background: "var(--bg)", color: "var(--accent)", border: "1px solid var(--accent-border)", borderRadius: 8, padding: "6px 14px", cursor: "pointer" }}
+            >
+              Von Website importieren
+            </button>
+          </div>
+
+          {importOpen && (
+            <form onSubmit={handleImport} style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+              <input
+                type="text"
+                placeholder="https://www.ikea.com/…"
+                value={importUrl}
+                onChange={e => setImportUrl(e.target.value)}
+                autoFocus
+                style={{ ...field, flex: 1, minWidth: 200, fontSize: 14 }}
+              />
+              <button
+                type="submit"
+                disabled={importing || !importUrl.trim()}
+                style={{ background: "var(--accent)", color: "#fff", border: "none", borderRadius: 10, padding: "10px 20px", fontSize: 14, fontWeight: 600, cursor: importing ? "default" : "pointer", opacity: importing || !importUrl.trim() ? 0.6 : 1, whiteSpace: "nowrap" }}
+              >
+                {importing ? "Lädt…" : "Importieren"}
+              </button>
+              {importError && <p style={{ width: "100%", margin: 0, fontSize: 13, color: "#ef4444" }}>{importError}</p>}
+            </form>
+          )}
           <form onSubmit={handleSubmit} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
             <input name="name"     placeholder="Name"       value={form.name}     onChange={handleChange} style={field} />
             <input name="category" placeholder="Kategorie"   value={form.category} onChange={handleChange} style={field} />

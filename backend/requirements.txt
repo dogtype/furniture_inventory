@@ -1,5 +1,8 @@
 annotated-doc==0.0.4
 python-multipart
+PyJWT
+httpx
+beautifulsoup4
 annotated-types==0.7.0
 anyio==4.13.0
 click==8.3.3
