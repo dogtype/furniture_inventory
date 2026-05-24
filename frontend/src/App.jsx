@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getFurniture, createFurniture, deleteFurniture, updateFurniture, uploadImage, deleteImage, imageUrl, login, scrapeUrl } from "./api";
+import { getFurniture, createFurniture, deleteFurniture, updateFurniture, uploadImage, deleteImage, imageUrl, login, scrapeUrl, uploadImageFromUrl } from "./api";
 
 function normalizeUrl(str) {
   const s = /^https?:\/\//i.test(str) ? str : `https://${str}`;
@@ -139,6 +139,21 @@ export default function App() {
     try {
       const data = await scrapeUrl(importUrl);
       setForm({ name: data.name, category: data.category, location: data.location, price: data.price || "" });
+      if (data.tags?.length) setFormTags(data.tags);
+      if (data.image_url) {
+        const result = await createFurniture({
+          name: data.name, category: data.category, location: data.location,
+          price: Number(data.price) || 0, tags: data.tags || [],
+        });
+        if (result.id) {
+          if (data.image_url) await uploadImageFromUrl(result.id, data.image_url);
+          setImportUrl("");
+          setImportOpen(false);
+          setFormTags([]);
+          load();
+          return;
+        }
+      }
       setImportUrl("");
       setImportOpen(false);
     } catch (err) {
@@ -185,6 +200,17 @@ export default function App() {
     setEditingId(null);
     setEditForm({});
     setEditTagInput("");
+    load();
+  }
+
+  function pastedFile(e) {
+    return [...(e.clipboardData?.items || [])].find(i => i.type.startsWith("image/"))?.getAsFile() || null;
+  }
+
+  async function handlePastedImage(id, file) {
+    setUploading(id);
+    await uploadImage(id, file);
+    setUploading(null);
     load();
   }
 
@@ -318,12 +344,13 @@ export default function App() {
             <input name="name"     placeholder="Name"       value={form.name}     onChange={handleChange} style={field} />
             <input name="category" placeholder="Kategorie"   value={form.category} onChange={handleChange} style={field} />
             <input name="location" placeholder="Location"   value={form.location} onChange={handleChange} style={field} />
-            <input name="price"    placeholder="Preis (€)"  value={form.price}    onChange={handleChange} style={field} type="number" min="0" />
+            <input name="price"    placeholder="Preis (€)"  value={form.price}    onChange={handleChange} style={field} type="number" min="0" step="0.01" />
 
             <input ref={formFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => setFormImage(e.target.files[0] || null)} />
             <button
               type="button"
               onClick={() => formFileRef.current.click()}
+              onPaste={e => { const f = pastedFile(e); if (f) setFormImage(f); }}
               style={{
                 ...field,
                 display: "flex",
@@ -453,7 +480,11 @@ export default function App() {
                 }}
               >
                 {/* IMAGE SLIDER */}
-                <div style={{ position: "relative", height: 156, background: "var(--code-bg)", overflow: "hidden" }}>
+                <div
+                  tabIndex={0}
+                  onPaste={e => { const f = pastedFile(e); if (f) handlePastedImage(item.id, f); }}
+                  style={{ position: "relative", height: 156, background: "var(--code-bg)", overflow: "hidden", outline: "none" }}
+                >
                   {images.length > 0 ? (
                     <>
                       <img
@@ -529,12 +560,13 @@ export default function App() {
                           { key: "name", label: "Name" },
                           { key: "category", label: "Kategorie" },
                           { key: "location", label: "Ort" },
-                          { key: "price", label: "Preis (€)", type: "number" },
-                        ].map(({ key, label, type = "text" }) => (
+                          { key: "price", label: "Preis (€)", type: "number", step: "0.01" },
+                        ].map(({ key, label, type = "text", step }) => (
                           <label key={key} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                             <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text)", textTransform: "uppercase", letterSpacing: "0.6px" }}>{label}</span>
                             <input
                               type={type}
+                              step={step}
                               value={editForm[key]}
                               onChange={e => setEditForm({ ...editForm, [key]: e.target.value })}
                               style={{ ...field, padding: "8px 12px", fontSize: 14 }}

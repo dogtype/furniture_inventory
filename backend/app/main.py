@@ -187,32 +187,58 @@ async def scrape(body: ScrapeRequest, _=Depends(verify_token)):
         raise HTTPException(status_code=422, detail=f"Seite konnte nicht geladen werden: {e}")
 
     soup = BeautifulSoup(response.text, "html.parser")
-    name = category = location = ""
+    name = category = location = image_url = ""
     price = 0.0
+    tags: list[str] = []
 
-    # 1. JSON-LD structured data (schema.org Product)
+    # 1. JSON-LD structured data (schema.org Product + BreadcrumbList)
     for script in soup.find_all("script", type="application/ld+json"):
         try:
             data = json.loads(script.string or "")
-            # unwrap @graph
+
+            # collect all nodes (handle @graph, list, or single object)
+            nodes = []
             if isinstance(data, dict) and "@graph" in data:
-                data = next((d for d in data["@graph"] if d.get("@type") == "Product"), {})
-            if isinstance(data, list):
-                data = next((d for d in data if d.get("@type") == "Product"), {})
-            if data.get("@type") != "Product":
-                continue
-            name = name or str(data.get("name", ""))
-            category = category or str(data.get("category", ""))
-            brand = data.get("brand", {})
-            location = location or (brand.get("name", "") if isinstance(brand, dict) else str(brand))
-            offers = data.get("offers", {})
-            if isinstance(offers, list):
-                offers = offers[0] if offers else {}
-            if not price and offers.get("price"):
-                try:
-                    price = float(str(offers["price"]).replace(",", "."))
-                except (ValueError, TypeError):
-                    pass
+                nodes = data["@graph"]
+            elif isinstance(data, list):
+                nodes = data
+            else:
+                nodes = [data]
+
+            for node in nodes:
+                t = node.get("@type", "")
+
+                if t == "Product":
+                    name = name or str(node.get("name", ""))
+                    category = category or str(node.get("category", ""))
+                    brand = node.get("brand", {})
+                    location = location or (brand.get("name", "") if isinstance(brand, dict) else str(brand))
+                    offers = node.get("offers", {})
+                    if isinstance(offers, list):
+                        offers = offers[0] if offers else {}
+                    if not price and offers.get("price"):
+                        try:
+                            price = float(str(offers["price"]).replace(",", "."))
+                        except (ValueError, TypeError):
+                            pass
+                    # image
+                    img = node.get("image", "")
+                    if isinstance(img, list): img = img[0] if img else ""
+                    if isinstance(img, dict): img = img.get("url", "")
+                    image_url = image_url or str(img)
+                    # keywords → tags
+                    kw = node.get("keywords", "")
+                    if isinstance(kw, str) and kw:
+                        tags = tags or [k.strip() for k in kw.split(",") if k.strip()]
+                    elif isinstance(kw, list):
+                        tags = tags or [str(k).strip() for k in kw if k]
+
+                elif t == "BreadcrumbList" and not tags:
+                    items = node.get("itemListElement", [])
+                    # skip first (home) and last (product itself)
+                    crumbs = [i.get("name", "").strip() for i in items[1:-1] if i.get("name")]
+                    tags = tags or crumbs
+
         except Exception:
             continue
 
@@ -223,6 +249,13 @@ async def scrape(body: ScrapeRequest, _=Depends(verify_token)):
 
     name = name or meta("og:title") or meta("twitter:title")
     location = location or meta("og:site_name")
+    image_url = image_url or meta("og:image")
+
+    # meta keywords fallback for tags
+    if not tags:
+        kw = meta("keywords")
+        if kw:
+            tags = [k.strip() for k in kw.split(",") if k.strip()]
 
     # 3. Plain HTML fallbacks
     if not name:
@@ -245,7 +278,52 @@ async def scrape(body: ScrapeRequest, _=Depends(verify_token)):
     if not name:
         raise HTTPException(status_code=422, detail="Keine Produktdaten gefunden – die Seite ist möglicherweise JavaScript-gerendert")
 
-    return {"name": name, "category": category, "price": price, "location": location}
+    return {"name": name, "category": category, "price": price, "location": location, "image_url": image_url, "tags": tags}
+
+
+class ImageUrlRequest(BaseModel):
+    url: str
+
+
+@app.post("/furniture/{item_id}/image-url")
+async def upload_image_from_url(item_id: int, body: ImageUrlRequest, _=Depends(verify_token)):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM furniture WHERE id = ?", (item_id,))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+            r = await client.get(body.url, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=422, detail=f"Bild konnte nicht geladen werden: {e}")
+
+    content_type = r.headers.get("content-type", "image/jpeg")
+    ext = "." + content_type.split("/")[-1].split(";")[0].strip() if "/" in content_type else ".jpg"
+    if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+        ext = ".jpg"
+
+    filename = f"{uuid.uuid4().hex}{ext}"
+    with open(os.path.join(UPLOAD_DIR, filename), "wb") as f:
+        f.write(r.content)
+
+    cursor.execute(
+        "SELECT COALESCE(MAX(position), -1) + 1 FROM furniture_images WHERE furniture_id = ?", (item_id,)
+    )
+    next_position = cursor.fetchone()[0]
+    cursor.execute(
+        "INSERT INTO furniture_images (furniture_id, filename, position) VALUES (?, ?, ?)",
+        (item_id, filename, next_position)
+    )
+    conn.commit()
+    image_id = cursor.lastrowid
+    conn.close()
+
+    return {"id": image_id, "filename": filename}
 
 
 @app.get("/furniture")

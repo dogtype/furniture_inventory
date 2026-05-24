@@ -42,6 +42,15 @@ export async function scrapeUrl(url) {
   return response.json();
 }
 
+export async function uploadImageFromUrl(id, url) {
+  const response = await request(`${API_URL}/furniture/${id}/image-url`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ url }),
+  });
+  return response.json();
+}
+
 export async function getFurniture() {
   const response = await request(`${API_URL}/furniture`, {
     headers: authHeaders(),
