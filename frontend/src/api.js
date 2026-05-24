@@ -1,4 +1,4 @@
-const API_URL = "http://89.244.85.149:1919";
+const API_URL = "https://89.244.85.149:1919";
 
 function getToken() {
   return localStorage.getItem("auth_token");
