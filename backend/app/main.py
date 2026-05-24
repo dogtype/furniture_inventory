@@ -278,7 +278,7 @@ async def scrape(body: ScrapeRequest, _=Depends(verify_token)):
     if not name:
         raise HTTPException(status_code=422, detail="Keine Produktdaten gefunden – die Seite ist möglicherweise JavaScript-gerendert")
 
-    return {"name": name, "category": category, "price": price, "location": location, "image_url": image_url, "tags": tags}
+    return {"name": name, "category": category, "price": price, "location": url, "image_url": image_url, "tags": tags}
 
 
 class ImageUrlRequest(BaseModel):

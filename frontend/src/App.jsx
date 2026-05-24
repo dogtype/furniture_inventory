@@ -109,6 +109,25 @@ export default function App() {
     return () => window.removeEventListener("auth:logout", logout);
   }, [authed]);
 
+  useEffect(() => {
+    function onGlobalPaste(e) {
+      const active = document.activeElement;
+      if (active && ["INPUT", "TEXTAREA"].includes(active.tagName) && active.type !== "button") return;
+      const file = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith("image/"))?.getAsFile();
+      if (!file) return;
+      const cardEl = active?.closest?.("[data-card-id]");
+      if (cardEl) {
+        const id = parseInt(cardEl.dataset.cardId);
+        setUploading(id);
+        uploadImage(id, file).then(() => { setUploading(null); load(); });
+      } else {
+        setFormImage(file);
+      }
+    }
+    document.addEventListener("paste", onGlobalPaste);
+    return () => document.removeEventListener("paste", onGlobalPaste);
+  }, []);
+
   async function load() {
     const data = await getFurniture();
     setItems(data);
@@ -350,7 +369,6 @@ export default function App() {
             <button
               type="button"
               onClick={() => formFileRef.current.click()}
-              onPaste={e => { const f = pastedFile(e); if (f) setFormImage(f); }}
               style={{
                 ...field,
                 display: "flex",
@@ -481,8 +499,8 @@ export default function App() {
               >
                 {/* IMAGE SLIDER */}
                 <div
+                  data-card-id={item.id}
                   tabIndex={0}
-                  onPaste={e => { const f = pastedFile(e); if (f) handlePastedImage(item.id, f); }}
                   style={{ position: "relative", height: 156, background: "var(--code-bg)", overflow: "hidden", outline: "none" }}
                 >
                   {images.length > 0 ? (
