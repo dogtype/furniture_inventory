@@ -564,13 +564,10 @@ export default function App() {
                   ) : (
                     <div
                       onClick={() => handleUploadClick(item.id)}
-                      style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                      style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer", background: "linear-gradient(135deg, var(--accent-bg) 0%, var(--code-bg) 100%)", gap: 8 }}
                     >
-                      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" style={{ color: "var(--text)", opacity: 0.35, marginBottom: 8 }}>
-                        <path d="M20 8H4a2 2 0 0 0-2 2v6h2v2h2v-2h8v2h2v-2h2V10a2 2 0 0 0-2-2Z" />
-                        <path d="M18 8V6a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v2" />
-                      </svg>
-                      <span style={{ fontSize: 12, color: "var(--text)", opacity: 0.6 }}>Klicken zum Hochladen</span>
+                      <img src="favicon.svg" alt="" style={{ width: 48, height: 48, opacity: 0.5 }} />
+                      <span style={{ fontSize: 11, color: "var(--text)", opacity: 0.55, fontWeight: 500 }}>Bild hinzufügen</span>
                     </div>
                   )}
                 </div>
