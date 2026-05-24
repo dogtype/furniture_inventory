@@ -21,20 +21,29 @@ async def lifespan(app: FastAPI):
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Ensure image_path column exists (legacy)
+    # Ensure legacy image_path column exists
     try:
         cursor.execute("ALTER TABLE furniture ADD COLUMN image_path TEXT")
         conn.commit()
     except Exception:
         pass
 
-    # Create images table
+    # Images table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS furniture_images (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             furniture_id INTEGER NOT NULL REFERENCES furniture(id),
             filename TEXT NOT NULL,
             position INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
+    # Tags table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS furniture_tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            furniture_id INTEGER NOT NULL REFERENCES furniture(id),
+            tag TEXT NOT NULL
         )
     """)
     conn.commit()
@@ -71,12 +80,46 @@ class FurnitureItem(BaseModel):
     category: str
     location: str
     price: float
+    tags: list[str] = []
 
 class FurnitureUpdate(BaseModel):
     name: str | None = None
     category: str | None = None
     location: str | None = None
     price: float | None = None
+    tags: list[str] | None = None
+
+
+# -------------------------
+# Helpers
+# -------------------------
+
+def _set_tags(cursor, furniture_id: int, tags: list[str]):
+    cursor.execute("DELETE FROM furniture_tags WHERE furniture_id = ?", (furniture_id,))
+    for tag in tags:
+        tag = tag.strip()
+        if tag:
+            cursor.execute(
+                "INSERT INTO furniture_tags (furniture_id, tag) VALUES (?, ?)",
+                (furniture_id, tag)
+            )
+
+
+def _fetch_related(cursor):
+    cursor.execute("SELECT * FROM furniture_images ORDER BY position, id")
+    images_rows = cursor.fetchall()
+    cursor.execute("SELECT * FROM furniture_tags ORDER BY id")
+    tags_rows = cursor.fetchall()
+
+    images_by_id = defaultdict(list)
+    for img in images_rows:
+        images_by_id[img["furniture_id"]].append({"id": img["id"], "filename": img["filename"]})
+
+    tags_by_id = defaultdict(list)
+    for t in tags_rows:
+        tags_by_id[t["furniture_id"]].append(t["tag"])
+
+    return images_by_id, tags_by_id
 
 
 # -------------------------
@@ -88,34 +131,23 @@ def root():
     return {"message": "Furniture API running"}
 
 
-# GET all furniture
 @app.get("/furniture")
 def get_furniture():
     conn = get_connection()
     cursor = conn.cursor()
-
     cursor.execute("SELECT * FROM furniture")
     items = [dict(row) for row in cursor.fetchall()]
-
-    cursor.execute("SELECT * FROM furniture_images ORDER BY position, id")
-    images = cursor.fetchall()
+    images_by_id, tags_by_id = _fetch_related(cursor)
     conn.close()
 
-    images_by_furniture = defaultdict(list)
-    for img in images:
-        images_by_furniture[img["furniture_id"]].append({
-            "id": img["id"],
-            "filename": img["filename"],
-        })
-
     for item in items:
-        item["images"] = images_by_furniture.get(item["id"], [])
+        item["images"] = images_by_id.get(item["id"], [])
+        item["tags"] = tags_by_id.get(item["id"], [])
         item.pop("image_path", None)
 
     return items
 
 
-# POST new furniture item
 @app.post("/furniture")
 def create_furniture(item: FurnitureItem):
     conn = get_connection()
@@ -124,13 +156,13 @@ def create_furniture(item: FurnitureItem):
         INSERT INTO furniture (name, category, location, price)
         VALUES (?, ?, ?, ?)
     """, (item.name, item.category, item.location, item.price))
-    conn.commit()
     item_id = cursor.lastrowid
+    _set_tags(cursor, item_id, item.tags)
+    conn.commit()
     conn.close()
     return {"id": item_id, "message": "Furniture item created"}
 
 
-# PATCH update a furniture item
 @app.patch("/furniture/{item_id}")
 def update_furniture(item_id: int, update: FurnitureUpdate):
     conn = get_connection()
@@ -141,22 +173,24 @@ def update_furniture(item_id: int, update: FurnitureUpdate):
         conn.close()
         raise HTTPException(status_code=404, detail="Item not found")
 
-    fields = {k: v for k, v in update.model_dump().items() if v is not None}
+    fields = {k: v for k, v in update.model_dump(exclude={"tags"}).items() if v is not None}
     if fields:
         set_clause = ", ".join(f"{k} = ?" for k in fields)
         cursor.execute(
             f"UPDATE furniture SET {set_clause} WHERE id = ?",
             (*fields.values(), item_id)
         )
-        conn.commit()
 
+    if update.tags is not None:
+        _set_tags(cursor, item_id, update.tags)
+
+    conn.commit()
     cursor.execute("SELECT * FROM furniture WHERE id = ?", (item_id,))
     updated = dict(cursor.fetchone())
     conn.close()
     return updated
 
 
-# POST image for a furniture item (appends, does not replace)
 @app.post("/furniture/{item_id}/image")
 async def upload_image(item_id: int, file: UploadFile = File(...)):
     conn = get_connection()
@@ -189,7 +223,6 @@ async def upload_image(item_id: int, file: UploadFile = File(...)):
     return {"id": image_id, "filename": filename}
 
 
-# DELETE a single image
 @app.delete("/furniture/{item_id}/image/{image_id}")
 def delete_image(item_id: int, image_id: int):
     conn = get_connection()
@@ -211,11 +244,9 @@ def delete_image(item_id: int, image_id: int):
     cursor.execute("DELETE FROM furniture_images WHERE id = ?", (image_id,))
     conn.commit()
     conn.close()
-
     return {"message": "Image deleted"}
 
 
-# DELETE furniture item and all its images
 @app.delete("/furniture/{item_id}")
 def delete_furniture(item_id: int):
     conn = get_connection()
@@ -233,10 +264,10 @@ def delete_furniture(item_id: int):
             os.remove(filepath)
 
     cursor.execute("DELETE FROM furniture_images WHERE furniture_id = ?", (item_id,))
+    cursor.execute("DELETE FROM furniture_tags WHERE furniture_id = ?", (item_id,))
     cursor.execute("DELETE FROM furniture WHERE id = ?", (item_id,))
     conn.commit()
     conn.close()
-
     return {"message": "Item deleted"}
 
 
