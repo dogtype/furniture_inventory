@@ -81,7 +81,7 @@ function LoginPage({ onLogin }) {
 }
 
 const emptyFilters = {
-  category: "", subcategory: "", families: [], priceMin: null, priceMax: null,
+  category: "", subcategory: "", families: [], used: "all", priceMin: null, priceMax: null,
   size: { length: ["", ""], width: ["", ""], height: ["", ""] },
 };
 
@@ -535,7 +535,7 @@ export default function App() {
   const filterSubcategories = [...new Set(items.filter(i => i.category === filters.category).map(i => i.subcategory).filter(Boolean))].sort();
   const filterFamilies = Object.keys(COLOR_FAMILIES).filter(f => items.some(i => (i.colors || []).some(c => colorFamily(c) === f)));
   const sizeFilterActive = Object.values(filters.size).some(([lo, hi]) => lo !== "" || hi !== "");
-  const anyFilterActive = !!(filters.category || filters.subcategory || filters.families.length || priceFilterActive || sizeFilterActive || activeTags.length);
+  const anyFilterActive = !!(filters.category || filters.subcategory || filters.families.length || filters.used !== "all" || priceFilterActive || sizeFilterActive || activeTags.length);
 
   function setSizeFilter(dim, i, value) {
     setFilters(f => ({ ...f, size: { ...f.size, [dim]: f.size[dim].map((v, j) => (j === i ? value : v)) } }));
@@ -549,6 +549,8 @@ export default function App() {
     if (activeTags.length && !activeTags.every(t => (item.tags || []).includes(t))) return false;
     if (filters.category && item.category !== filters.category) return false;
     if (filters.subcategory && item.subcategory !== filters.subcategory) return false;
+    if (filters.used === "used" && !item.used) return false;
+    if (filters.used === "unused" && item.used) return false;
     if (filters.families.length && !(item.colors || []).some(c => filters.families.includes(colorFamily(c)))) return false;
     if (priceFilterActive && (item.price < priceLo || item.price > priceHi)) return false;
     for (const dim of ["length", "width", "height"]) {
@@ -872,6 +874,35 @@ export default function App() {
               </div>
             </FilterSection>
           )}
+          <FilterSection title="Verwendet">
+            <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+              {[
+                { value: "all", label: "Alle" },
+                { value: "used", label: "Ja" },
+                { value: "unused", label: "Nein" },
+              ].map(({ value, label }, i) => {
+                const active = filters.used === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setFilters({ ...filters, used: value })}
+                    style={{
+                      flex: 1, fontSize: 13, fontWeight: active ? 600 : 400, padding: touch ? "11px 8px" : "7px 8px", cursor: "pointer",
+                      border: "none", borderLeft: i === 0 ? "none" : "1px solid var(--border)",
+                      background: active ? "var(--accent)" : "var(--bg)",
+                      color: active ? "#fff" : "var(--text)",
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </FilterSection>
+
           {allTags.length > 0 && (
             <FilterSection title="Tags">
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -1145,7 +1176,13 @@ export default function App() {
                         {item.location && (() => {
                           const parsed = normalizeUrl(item.location);
                           return parsed ? (
-                            <a href={parsed.href} target="_blank" rel="noreferrer" style={{ fontSize: 12, background: "var(--code-bg)", color: "var(--accent)", borderRadius: 20, padding: "2px 10px", textDecoration: "none" }}>
+                            <a
+                              href={parsed.href}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={item.link_ok === false ? `Link funktioniert nicht mehr (${item.link_status || "nicht erreichbar"}), geprüft am ${new Date(item.link_checked_at).toLocaleDateString("de-DE")}` : undefined}
+                              style={{ fontSize: 12, background: "var(--code-bg)", color: item.link_ok === false ? "#ef4444" : "var(--accent)", borderRadius: 20, padding: item.link_ok === false ? "1px 9px" : "2px 10px", textDecoration: "none", border: item.link_ok === false ? "1px solid #ef4444" : "none" }}
+                            >
                               🔗 {parsed.hostname}
                             </a>
                           ) : (

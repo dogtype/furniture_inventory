@@ -14,7 +14,9 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from app import scraper
+import asyncio
+
+from app import linkcheck, scraper
 from app.db import get_connection
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -66,6 +68,14 @@ async def lifespan(app: FastAPI):
         conn.commit()
     except Exception:
         pass
+
+    # Link check state (see linkcheck.py)
+    for col_def in ("link_ok INTEGER", "link_status TEXT", "link_checked_at TEXT", "link_fails INTEGER NOT NULL DEFAULT 0"):
+        try:
+            cursor.execute(f"ALTER TABLE furniture ADD COLUMN {col_def}")
+            conn.commit()
+        except Exception:
+            pass
 
     # Used flag (Verwendet)
     try:
@@ -139,7 +149,9 @@ async def lifespan(app: FastAPI):
             )
     conn.commit()
     conn.close()
+    checker = asyncio.create_task(linkcheck.scheduler())
     yield
+    checker.cancel()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -315,6 +327,13 @@ async def upload_image_from_url(item_id: int, body: ImageUrlRequest, _=Depends(v
     return {"id": image_id, "filename": filename}
 
 
+@app.post("/links/check")
+async def check_links(_=Depends(verify_token)):
+    """Checks all links now instead of waiting for the daily run."""
+    asyncio.create_task(linkcheck.run_checks(force=True))
+    return {"started": True}
+
+
 @app.get("/furniture")
 def get_furniture(_=Depends(verify_token)):
     conn = get_connection()
@@ -329,6 +348,8 @@ def get_furniture(_=Depends(verify_token)):
         item["tags"] = tags_by_id.get(item["id"], [])
         item["colors"] = colors_by_id.get(item["id"], [])
         item["used"] = bool(item["used"])
+        item["link_ok"] = None if item["link_ok"] is None else bool(item["link_ok"])
+        item.pop("link_fails", None)
         item.pop("image_path", None)
 
     return items
@@ -363,6 +384,9 @@ def update_furniture(item_id: int, update: FurnitureUpdate, _=Depends(verify_tok
     fields = {k: v for k, v in update.model_dump(exclude={"tags", "colors"}).items() if v is not None}
     if "used" in fields:
         fields["used"] = int(fields["used"])
+    if "location" in fields:
+        # a new link has not been checked yet
+        fields.update(link_ok=None, link_status=None, link_checked_at=None, link_fails=0)
     if fields:
         set_clause = ", ".join(f"{k} = ?" for k in fields)
         cursor.execute(
