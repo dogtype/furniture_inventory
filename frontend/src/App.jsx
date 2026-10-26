@@ -2,6 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { getFurniture, createFurniture, deleteFurniture, updateFurniture, uploadImage, deleteImage, setImageColor, imageUrl, login, scrapeUrl, uploadImageFromUrl } from "./api";
 import { CATEGORIES } from "./categories";
 
+// URL to open for a card, or null if the location is only a text like "Wohnzimmer links"
+function linkHref(location) {
+  const loc = (location || "").trim();
+  if (!loc || /\s/.test(loc)) return null;
+  const url = normalizeUrl(loc);
+  return url && (/^https?:\/\//i.test(loc) || url.hostname.includes(".")) ? url.href : null;
+}
+
 function normalizeUrl(str) {
   const s = /^https?:\/\//i.test(str) ? str : `https://${str}`;
   try { return new URL(s); } catch { return null; }
@@ -614,7 +622,7 @@ export default function App() {
               placeholder="Suchen…"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              style={{ ...field, paddingLeft: 36, fontSize: 14 }}
+              style={{ ...field, paddingLeft: 36, fontSize: 14, height: 46 }}
             />
           </div>
           <button
@@ -623,7 +631,7 @@ export default function App() {
           >
             Abmelden
           </button>
-          <div ref={settingsRef} style={{ position: "relative" }}>
+          <div ref={settingsRef} style={{ position: "relative", display: "flex", alignSelf: "stretch" }}>
             <button
               type="button"
               aria-label="Einstellungen"
@@ -631,9 +639,9 @@ export default function App() {
               aria-expanded={settingsOpen}
               title="Einstellungen"
               onClick={() => setSettingsOpen(o => !o)}
-              style={{ display: "flex", alignItems: "center", justifyContent: "center", width: touch ? 40 : 34, height: touch ? 40 : 34, background: settingsOpen ? "var(--accent-bg)" : "transparent", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, cursor: "pointer", padding: 0 }}
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", alignSelf: "stretch", minWidth: 46, minHeight: 46, background: settingsOpen ? "var(--accent-bg)" : "transparent", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, cursor: "pointer", padding: 0 }}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
@@ -956,13 +964,28 @@ export default function App() {
             const activeColor = (item.colors || []).includes(colorFilters[item.id]) ? colorFilters[item.id] : null;
             const images = (item.images || []).filter(img => !activeColor || img.color === activeColor || img.id === pinnedImages[item.id]);
             const idx = sliderIdx(item.id, images.length);
+            const cardLink = linkHref(item.location);
+            const openCardLink = () => window.open(cardLink, "_blank", "noopener,noreferrer");
 
             return (
               <div
                 key={item.id}
                 data-card-id={item.id}
                 tabIndex={0}
+                onClick={e => {
+                  // buttons, links and inputs on the card keep their own behavior
+                  if (!cardLink || editingId === item.id) return;
+                  if (e.target.closest("button, a, input, select, textarea, label, [data-no-open]")) return;
+                  if (window.getSelection()?.toString()) return;
+                  openCardLink();
+                }}
+                onKeyDown={e => {
+                  if (e.key === "Enter" && e.target === e.currentTarget && cardLink && editingId !== item.id) openCardLink();
+                }}
                 style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  cursor: cardLink && editingId !== item.id ? "pointer" : "default",
                   background: "var(--bg)",
                   border: "1px solid var(--border)",
                   borderRadius: 16,
@@ -1027,7 +1050,7 @@ export default function App() {
 
                       {/* Dots */}
                       {images.length > 1 && (
-                        <div style={{ position: "absolute", bottom: touch ? 0 : 8, left: 0, right: 0, display: "flex", justifyContent: "center", gap: touch ? 0 : 5 }}>
+                        <div data-no-open style={{ position: "absolute", bottom: touch ? 0 : 8, left: 0, right: 0, display: "flex", justifyContent: "center", gap: touch ? 0 : 5 }}>
                           {images.map((_, i) => (
                             <div
                               key={i}
@@ -1050,6 +1073,7 @@ export default function App() {
                     </div>
                   ) : (
                     <div
+                      data-no-open
                       onClick={() => handleUploadClick(item.id)}
                       style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
                     >
@@ -1063,7 +1087,7 @@ export default function App() {
                 </div>
 
                 {/* CONTENT */}
-                <div style={{ padding: 16 }}>
+                <div style={{ padding: 16, flex: 1, display: "flex", flexDirection: "column" }}>
                   {editingId === item.id ? (
                     <>
                       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
@@ -1140,26 +1164,8 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      {/* TAGS + LOCATION */}
+                      {/* USED + LOCATION */}
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-                        {(item.tags || []).map(tag => {
-                          const active = activeTags.includes(tag);
-                          return (
-                            <button
-                              key={tag}
-                              onClick={() => toggleFilter(tag)}
-                              style={{
-                                fontSize: 12, fontWeight: 600, borderRadius: 20, padding: "2px 10px", cursor: "pointer",
-                                border: active ? "1px solid var(--accent)" : "none",
-                                background: active ? "var(--accent)" : "var(--code-bg)",
-                                color: active ? "#fff" : "var(--text-h)",
-                                transition: "all 0.15s",
-                              }}
-                            >
-                              {tag}
-                            </button>
-                          );
-                        })}
                         <button
                           type="button"
                           title="Klicken zum Umschalten"
@@ -1236,6 +1242,28 @@ export default function App() {
                           </button>
                         </div>
                       </div>
+                      {(item.tags || []).length > 0 && (
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: "auto", paddingTop: 14 }}>
+                        {(item.tags || []).map(tag => {
+                            const active = activeTags.includes(tag);
+                            return (
+                              <button
+                                key={tag}
+                                onClick={() => toggleFilter(tag)}
+                                style={{
+                                  fontSize: 12, fontWeight: 600, borderRadius: 20, padding: "2px 10px", cursor: "pointer",
+                                  border: active ? "1px solid var(--accent)" : "none",
+                                  background: active ? "var(--accent)" : "var(--code-bg)",
+                                  color: active ? "#fff" : "var(--text-h)",
+                                  transition: "all 0.15s",
+                                }}
+                              >
+                                {tag}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
