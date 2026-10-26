@@ -200,10 +200,14 @@ function formatSize(item) {
   return parts.map(p => p ?? "?").join(" × ") + " cm";
 }
 
+const RAINBOW = "conic-gradient(red, yellow, lime, aqua, blue, magenta, red)";
+
+// Color list with a picker. Until a color is picked, the picker shows a rainbow circle instead of a plain swatch.
 function ColorPalette({ colors, onChange }) {
-  const [picked, setPicked] = useState("#3b82f6");
+  const [picked, setPicked] = useState(null);
   const add = () => {
-    if (!colors.includes(picked)) onChange([...colors, picked]);
+    if (picked && !colors.includes(picked)) onChange([...colors, picked]);
+    setPicked(null);
   };
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
@@ -216,16 +220,23 @@ function ColorPalette({ colors, onChange }) {
           style={{ width: 30, height: 30, borderRadius: "50%", background: c, border: "2px solid var(--border)", cursor: "pointer", padding: 0 }}
         />
       ))}
-      <input
-        type="color"
-        value={picked}
-        onChange={e => setPicked(e.target.value)}
-        style={{ width: 32, height: 32, border: "none", background: "none", padding: 0, cursor: "pointer" }}
-      />
+      <div
+        title="Farbe auswählen"
+        style={{ position: "relative", width: 34, height: 34, borderRadius: "50%", background: picked ?? RAINBOW, border: "2px solid var(--border)", flexShrink: 0 }}
+      >
+        <input
+          type="color"
+          aria-label="Farbe auswählen"
+          value={picked ?? "#3b82f6"}
+          onChange={e => setPicked(e.target.value)}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer", padding: 0, border: "none" }}
+        />
+      </div>
       <button
         type="button"
         onClick={add}
-        style={{ fontSize: 13, background: "transparent", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "5px 12px", cursor: "pointer" }}
+        disabled={!picked}
+        style={{ fontSize: 13, background: "transparent", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "5px 12px", cursor: picked ? "pointer" : "default", opacity: picked ? 1 : 0.5 }}
       >
         + Farbe
       </button>
@@ -272,6 +283,13 @@ export default function App() {
   const narrow = useMediaQuery("(max-width: 900px)");
   const touch = useMediaQuery("(pointer: coarse)");
   const [filterOpen, setFilterOpen] = useState(false);
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem("theme") || "system"; } catch { return "system"; }
+  });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsRef = useRef(null);
+  const asideRef = useRef(null);
+  const [asideTall, setAsideTall] = useState(false);
 
   const fileInputRef = useRef(null);
   const formFileRef = useRef(null);
@@ -283,6 +301,41 @@ export default function App() {
     window.addEventListener("auth:logout", logout);
     return () => window.removeEventListener("auth:logout", logout);
   }, [authed]);
+
+  // "light" and "dark" set data-theme on <html>, "system" removes it so the device setting applies
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "light" || theme === "dark") root.setAttribute("data-theme", theme);
+    else root.removeAttribute("data-theme");
+    try { localStorage.setItem("theme", theme); } catch { /* storage not available */ }
+  }, [theme]);
+
+  useEffect(() => {
+    const el = asideRef.current;
+    if (!el) return;
+    const measure = () => setAsideTall(el.offsetHeight > window.innerHeight - 32);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [narrow, filterOpen, authed]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const close = e => {
+      if (e.type === "keydown" ? e.key === "Escape" : !settingsRef.current?.contains(e.target)) setSettingsOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [settingsOpen]);
 
   useEffect(() => {
     function onGlobalPaste(e) {
@@ -568,6 +621,47 @@ export default function App() {
           >
             Abmelden
           </button>
+          <div ref={settingsRef} style={{ position: "relative" }}>
+            <button
+              type="button"
+              aria-label="Einstellungen"
+              aria-haspopup="menu"
+              aria-expanded={settingsOpen}
+              title="Einstellungen"
+              onClick={() => setSettingsOpen(o => !o)}
+              style={{ display: "flex", alignItems: "center", justifyContent: "center", width: touch ? 40 : 34, height: touch ? 40 : 34, background: settingsOpen ? "var(--accent-bg)" : "transparent", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, cursor: "pointer", padding: 0 }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </button>
+            {settingsOpen && (
+              <div
+                role="menu"
+                style={{ position: "absolute", right: 0, top: "calc(100% + 8px)", zIndex: 30, minWidth: 190, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "var(--shadow)", padding: 8 }}
+              >
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text)", textTransform: "uppercase", letterSpacing: "0.6px", padding: "6px 10px" }}>Darstellung</div>
+                {[
+                  { value: "light", label: "Hell" },
+                  { value: "dark", label: "Dunkel" },
+                  { value: "system", label: "System" },
+                ].map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={theme === value}
+                    onClick={() => { setTheme(value); setSettingsOpen(false); }}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", textAlign: "left", fontSize: 14, padding: touch ? "12px 10px" : "8px 10px", background: theme === value ? "var(--accent-bg)" : "transparent", color: theme === value ? "var(--accent)" : "var(--text-h)", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: theme === value ? 600 : 400 }}
+                  >
+                    {label}
+                    {theme === value && <span aria-hidden="true">✓</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -706,7 +800,7 @@ export default function App() {
 
         {/* FILTER SIDEBAR */}
         {(!narrow || filterOpen) && (
-        <aside style={{ flex: narrow ? "1 1 100%" : "0 0 240px", boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 20, position: narrow ? "static" : "sticky", top: 16, maxHeight: narrow ? "none" : "calc(100vh - 32px)", overflowY: narrow ? "visible" : "auto" }}>
+        <aside ref={asideRef} style={{ flex: narrow ? "1 1 100%" : "0 0 240px", boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 20, position: narrow || asideTall ? "static" : "sticky", top: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <h3 style={{ margin: 0, fontSize: 16, color: "var(--text-h)" }}>Filter</h3>
             {anyFilterActive && (
@@ -780,7 +874,7 @@ export default function App() {
           )}
           {allTags.length > 0 && (
             <FilterSection title="Tags">
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 200, overflowY: "auto" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {allTags.map(tag => {
                   const active = activeTags.includes(tag);
                   return (
@@ -848,7 +942,7 @@ export default function App() {
               >
                 {/* IMAGE SLIDER */}
                 <div
-                  style={{ position: "relative", aspectRatio: "1 / 1", background: "var(--code-bg)", overflow: "hidden" }}
+                  style={{ position: "relative", aspectRatio: "1 / 1", background: images.length > 0 ? "#fff" : "var(--code-bg)", overflow: "hidden" }}
                 >
                   {images.length > 0 ? (
                     <>
