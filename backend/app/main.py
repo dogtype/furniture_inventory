@@ -7,15 +7,14 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
-import json
 import re
 import httpx
 import jwt
-from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from app import scraper
 from app.db import get_connection
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -56,6 +55,28 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    # Used flag (Verwendet)
+    try:
+        cursor.execute("ALTER TABLE furniture ADD COLUMN used INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    except Exception:
+        pass
+
+    # Sub-category (Unterkategorie)
+    try:
+        cursor.execute("ALTER TABLE furniture ADD COLUMN subcategory TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+    except Exception:
+        pass
+
+    # Size columns (Größe), in cm
+    for col in ("length", "width", "height"):
+        try:
+            cursor.execute(f"ALTER TABLE furniture ADD COLUMN {col} REAL")
+            conn.commit()
+        except Exception:
+            pass
+
     # Images table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS furniture_images (
@@ -66,12 +87,27 @@ async def lifespan(app: FastAPI):
         )
     """)
 
+    # Optional color of an image (one of the item's colors)
+    try:
+        cursor.execute("ALTER TABLE furniture_images ADD COLUMN color TEXT")
+        conn.commit()
+    except Exception:
+        pass
+
     # Tags table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS furniture_tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             furniture_id INTEGER NOT NULL REFERENCES furniture(id),
             tag TEXT NOT NULL
+        )
+    """)
+    # Colors table (hex values like #aabbcc)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS furniture_colors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            furniture_id INTEGER NOT NULL REFERENCES furniture(id),
+            color TEXT NOT NULL
         )
     """)
     conn.commit()
@@ -113,16 +149,28 @@ class ScrapeRequest(BaseModel):
 class FurnitureItem(BaseModel):
     name: str
     category: str
+    subcategory: str = ""
     location: str
     price: float
+    used: bool = False
+    length: float | None = None
+    width: float | None = None
+    height: float | None = None
     tags: list[str] = []
+    colors: list[str] = []
 
 class FurnitureUpdate(BaseModel):
     name: str | None = None
     category: str | None = None
+    subcategory: str | None = None
     location: str | None = None
     price: float | None = None
+    used: bool | None = None
+    length: float | None = None
+    width: float | None = None
+    height: float | None = None
     tags: list[str] | None = None
+    colors: list[str] | None = None
 
 
 # -------------------------
@@ -140,21 +188,49 @@ def _set_tags(cursor, furniture_id: int, tags: list[str]):
             )
 
 
+HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _set_colors(cursor, furniture_id: int, colors: list[str]):
+    cursor.execute("DELETE FROM furniture_colors WHERE furniture_id = ?", (furniture_id,))
+    seen = set()
+    for color in colors:
+        color = color.strip().lower()
+        if HEX_COLOR.match(color) and color not in seen:
+            seen.add(color)
+            cursor.execute(
+                "INSERT INTO furniture_colors (furniture_id, color) VALUES (?, ?)",
+                (furniture_id, color)
+            )
+    # Images tagged with a color that was removed become uncolored
+    cursor.execute(
+        f"UPDATE furniture_images SET color = NULL WHERE furniture_id = ? AND color IS NOT NULL"
+        f" AND color NOT IN ({','.join('?' * len(seen))})",
+        (furniture_id, *seen)
+    )
+
+
 def _fetch_related(cursor):
     cursor.execute("SELECT * FROM furniture_images ORDER BY position, id")
     images_rows = cursor.fetchall()
     cursor.execute("SELECT * FROM furniture_tags ORDER BY id")
     tags_rows = cursor.fetchall()
+    cursor.execute("SELECT * FROM furniture_colors ORDER BY id")
+    colors_rows = cursor.fetchall()
 
     images_by_id = defaultdict(list)
     for img in images_rows:
-        images_by_id[img["furniture_id"]].append({"id": img["id"], "filename": img["filename"]})
+        images_by_id[img["furniture_id"]].append({"id": img["id"], "filename": img["filename"], "color": img["color"]})
 
     tags_by_id = defaultdict(list)
     for t in tags_rows:
         tags_by_id[t["furniture_id"]].append(t["tag"])
 
-    return images_by_id, tags_by_id
+    colors_by_id = defaultdict(list)
+    for c in colors_rows:
+        colors_by_id[c["furniture_id"]].append(c["color"])
+
+    return images_by_id, tags_by_id, colors_by_id
 
 
 # -------------------------
@@ -176,109 +252,10 @@ def login(body: LoginRequest):
 @app.post("/scrape")
 async def scrape(body: ScrapeRequest, _=Depends(verify_token)):
     url = body.url if body.url.startswith("http") else f"https://{body.url}"
-
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
-            response = await client.get(url, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            })
-        response.raise_for_status()
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Seite konnte nicht geladen werden: {e}")
-
-    soup = BeautifulSoup(response.text, "html.parser")
-    name = category = location = image_url = ""
-    price = 0.0
-    tags: list[str] = []
-
-    # 1. JSON-LD structured data (schema.org Product + BreadcrumbList)
-    for script in soup.find_all("script", type="application/ld+json"):
-        try:
-            data = json.loads(script.string or "")
-
-            # collect all nodes (handle @graph, list, or single object)
-            nodes = []
-            if isinstance(data, dict) and "@graph" in data:
-                nodes = data["@graph"]
-            elif isinstance(data, list):
-                nodes = data
-            else:
-                nodes = [data]
-
-            for node in nodes:
-                t = node.get("@type", "")
-
-                if t == "Product":
-                    name = name or str(node.get("name", ""))
-                    category = category or str(node.get("category", ""))
-                    brand = node.get("brand", {})
-                    location = location or (brand.get("name", "") if isinstance(brand, dict) else str(brand))
-                    offers = node.get("offers", {})
-                    if isinstance(offers, list):
-                        offers = offers[0] if offers else {}
-                    if not price and offers.get("price"):
-                        try:
-                            price = float(str(offers["price"]).replace(",", "."))
-                        except (ValueError, TypeError):
-                            pass
-                    # image
-                    img = node.get("image", "")
-                    if isinstance(img, list): img = img[0] if img else ""
-                    if isinstance(img, dict): img = img.get("url", "")
-                    image_url = image_url or str(img)
-                    # keywords → tags
-                    kw = node.get("keywords", "")
-                    if isinstance(kw, str) and kw:
-                        tags = tags or [k.strip() for k in kw.split(",") if k.strip()]
-                    elif isinstance(kw, list):
-                        tags = tags or [str(k).strip() for k in kw if k]
-
-                elif t == "BreadcrumbList" and not tags:
-                    items = node.get("itemListElement", [])
-                    # skip first (home) and last (product itself)
-                    crumbs = [i.get("name", "").strip() for i in items[1:-1] if i.get("name")]
-                    tags = tags or crumbs
-
-        except Exception:
-            continue
-
-    # 2. Open Graph meta tags
-    def meta(prop):
-        tag = soup.find("meta", property=prop) or soup.find("meta", attrs={"name": prop})
-        return tag.get("content", "").strip() if tag else ""
-
-    name = name or meta("og:title") or meta("twitter:title")
-    location = location or meta("og:site_name")
-    image_url = image_url or meta("og:image")
-
-    # meta keywords fallback for tags
-    if not tags:
-        kw = meta("keywords")
-        if kw:
-            tags = [k.strip() for k in kw.split(",") if k.strip()]
-
-    # 3. Plain HTML fallbacks
-    if not name:
-        h1 = soup.find("h1")
-        name = h1.get_text(strip=True) if h1 else ""
-    if not name:
-        title = soup.find("title")
-        name = title.get_text(strip=True).split("|")[0].split("-")[0].strip() if title else ""
-
-    # 4. Price heuristic
-    if not price:
-        match = re.search(r'(\d{1,5}[.,]\d{2})\s*€|€\s*(\d{1,5}[.,]\d{2})', soup.get_text())
-        if match:
-            raw = (match.group(1) or match.group(2)).replace(",", ".")
-            try:
-                price = float(raw)
-            except ValueError:
-                pass
-
-    if not name:
-        raise HTTPException(status_code=422, detail="Keine Produktdaten gefunden – die Seite ist möglicherweise JavaScript-gerendert")
-
-    return {"name": name, "category": category, "price": price, "location": url, "image_url": image_url, "tags": tags}
+        return await scraper.scrape(url)
+    except scraper.ScrapeError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 class ImageUrlRequest(BaseModel):
@@ -332,12 +309,14 @@ def get_furniture(_=Depends(verify_token)):
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM furniture")
     items = [dict(row) for row in cursor.fetchall()]
-    images_by_id, tags_by_id = _fetch_related(cursor)
+    images_by_id, tags_by_id, colors_by_id = _fetch_related(cursor)
     conn.close()
 
     for item in items:
         item["images"] = images_by_id.get(item["id"], [])
         item["tags"] = tags_by_id.get(item["id"], [])
+        item["colors"] = colors_by_id.get(item["id"], [])
+        item["used"] = bool(item["used"])
         item.pop("image_path", None)
 
     return items
@@ -348,11 +327,12 @@ def create_furniture(item: FurnitureItem, _=Depends(verify_token)):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO furniture (name, category, location, price)
-        VALUES (?, ?, ?, ?)
-    """, (item.name, item.category, item.location, item.price))
+        INSERT INTO furniture (name, category, subcategory, location, price, used, length, width, height)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (item.name, item.category, item.subcategory, item.location, item.price, int(item.used), item.length, item.width, item.height))
     item_id = cursor.lastrowid
     _set_tags(cursor, item_id, item.tags)
+    _set_colors(cursor, item_id, item.colors)
     conn.commit()
     conn.close()
     return {"id": item_id, "message": "Furniture item created"}
@@ -368,7 +348,9 @@ def update_furniture(item_id: int, update: FurnitureUpdate, _=Depends(verify_tok
         conn.close()
         raise HTTPException(status_code=404, detail="Item not found")
 
-    fields = {k: v for k, v in update.model_dump(exclude={"tags"}).items() if v is not None}
+    fields = {k: v for k, v in update.model_dump(exclude={"tags", "colors"}).items() if v is not None}
+    if "used" in fields:
+        fields["used"] = int(fields["used"])
     if fields:
         set_clause = ", ".join(f"{k} = ?" for k in fields)
         cursor.execute(
@@ -378,6 +360,9 @@ def update_furniture(item_id: int, update: FurnitureUpdate, _=Depends(verify_tok
 
     if update.tags is not None:
         _set_tags(cursor, item_id, update.tags)
+
+    if update.colors is not None:
+        _set_colors(cursor, item_id, update.colors)
 
     conn.commit()
     cursor.execute("SELECT * FROM furniture WHERE id = ?", (item_id,))
@@ -416,6 +401,38 @@ async def upload_image(item_id: int, file: UploadFile = File(...), _=Depends(ver
     conn.close()
 
     return {"id": image_id, "filename": filename}
+
+
+class ImageColorUpdate(BaseModel):
+    color: str | None = None
+
+
+@app.patch("/furniture/{item_id}/image/{image_id}")
+def update_image_color(item_id: int, image_id: int, body: ImageColorUpdate, _=Depends(verify_token)):
+    color = body.color.strip().lower() if body.color else None
+    if color is not None and not HEX_COLOR.match(color):
+        raise HTTPException(status_code=422, detail="Invalid color")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    if color is not None:
+        cursor.execute(
+            "SELECT 1 FROM furniture_colors WHERE furniture_id = ? AND color = ?", (item_id, color)
+        )
+        if not cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=422, detail="Color does not belong to this item")
+
+    cursor.execute(
+        "UPDATE furniture_images SET color = ? WHERE id = ? AND furniture_id = ?",
+        (color, image_id, item_id)
+    )
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Image not found")
+    conn.commit()
+    conn.close()
+    return {"id": image_id, "color": color}
 
 
 @app.delete("/furniture/{item_id}/image/{image_id}")
@@ -460,6 +477,7 @@ def delete_furniture(item_id: int, _=Depends(verify_token)):
 
     cursor.execute("DELETE FROM furniture_images WHERE furniture_id = ?", (item_id,))
     cursor.execute("DELETE FROM furniture_tags WHERE furniture_id = ?", (item_id,))
+    cursor.execute("DELETE FROM furniture_colors WHERE furniture_id = ?", (item_id,))
     cursor.execute("DELETE FROM furniture WHERE id = ?", (item_id,))
     conn.commit()
     conn.close()
@@ -471,6 +489,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:1919",
         "https://dogtype.github.io",
     ],
     allow_credentials=True,

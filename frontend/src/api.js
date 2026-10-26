@@ -1,4 +1,4 @@
-const API_URL = "https://89.244.85.149:1919";
+const API_URL = import.meta.env.VITE_API_URL ?? "https://89.244.85.149:1919";
 
 function getToken() {
   return localStorage.getItem("auth_token");
@@ -90,6 +90,15 @@ export async function uploadImage(id, file) {
     method: "POST",
     headers: authHeaders(),
     body: formData,
+  });
+  return response.json();
+}
+
+export async function setImageColor(furnitureId, imageId, color) {
+  const response = await request(`${API_URL}/furniture/${furnitureId}/image/${imageId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ color }),
   });
   return response.json();
 }

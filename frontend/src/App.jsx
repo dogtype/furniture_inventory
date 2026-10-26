@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { getFurniture, createFurniture, deleteFurniture, updateFurniture, uploadImage, deleteImage, imageUrl, login, scrapeUrl, uploadImageFromUrl } from "./api";
+import { getFurniture, createFurniture, deleteFurniture, updateFurniture, uploadImage, deleteImage, setImageColor, imageUrl, login, scrapeUrl, uploadImageFromUrl } from "./api";
+import { CATEGORIES } from "./categories";
 
 function normalizeUrl(str) {
   const s = /^https?:\/\//i.test(str) ? str : `https://${str}`;
@@ -79,15 +80,145 @@ function LoginPage({ onLogin }) {
   );
 }
 
+const emptyFilters = {
+  category: "", subcategory: "", families: [], priceMin: null, priceMax: null,
+  size: { length: ["", ""], width: ["", ""], height: ["", ""] },
+};
+
+const COLOR_FAMILIES = {
+  Schwarz: "#111111", Weiß: "#ffffff", Grau: "#888888", Rot: "#dc2626", Orange: "#f97316", Braun: "#92400e",
+  Gelb: "#eab308", Grün: "#16a34a", Türkis: "#14b8a6", Blau: "#2563eb", Lila: "#9333ea", Rosa: "#ec4899",
+};
+
+// Maps any hex color to the nearest named color family, so that similar shades are filtered together.
+function colorFamily(hex) {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  if (l < 0.12) return "Schwarz";
+  if (l > 0.92) return "Weiß";
+  if (s < 0.12) return "Grau";
+  let h;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  h = (h * 60 + 360) % 360;
+  if (h < 15 || h >= 345) return "Rot";
+  if (h < 45) return l < 0.4 ? "Braun" : "Orange";
+  if (h < 70) return "Gelb";
+  if (h < 165) return "Grün";
+  if (h < 200) return "Türkis";
+  if (h < 255) return "Blau";
+  if (h < 290) return "Lila";
+  return "Rosa";
+}
+
+function FilterSection({ title, children }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text)", textTransform: "uppercase", letterSpacing: "0.6px" }}>{title}</span>
+      {children}
+    </div>
+  );
+}
+
+// Category and sub-category selects. Values that are not in the list (e.g. older free-text entries) stay selectable.
+function CategorySelects({ category, subcategory, onChange, style, labeled }) {
+  const categories = Object.keys(CATEGORIES);
+  if (category && !categories.includes(category)) categories.push(category);
+  const subs = [...(CATEGORIES[category] || [])];
+  if (subcategory && !subs.includes(subcategory)) subs.push(subcategory);
+
+  const wrap = (label, el) => labeled ? (
+    <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text)", textTransform: "uppercase", letterSpacing: "0.6px" }}>{label}</span>
+      {el}
+    </label>
+  ) : el;
+
+  return (
+    <>
+      {wrap("Kategorie",
+        <select value={category} onChange={e => onChange(e.target.value, "")} style={style}>
+          <option value="">Kategorie</option>
+          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      )}
+      {wrap("Unterkategorie",
+        <select value={subcategory} onChange={e => onChange(category, e.target.value)} disabled={!category} style={style}>
+          <option value="">Unterkategorie</option>
+          {subs.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+      )}
+    </>
+  );
+}
+
+const emptyForm = { name: "", category: "", subcategory: "", location: "", price: "", used: false, length: "", width: "", height: "" };
+
+const sizeFields = [
+  { key: "length", label: "Länge (cm)" },
+  { key: "width", label: "Breite (cm)" },
+  { key: "height", label: "Höhe (cm)" },
+];
+
+const toSize = v => (v === "" || v == null ? null : Number(v));
+
+function formatSize(item) {
+  const parts = [item.length, item.width, item.height];
+  if (parts.every(p => p == null)) return "";
+  return parts.map(p => p ?? "?").join(" × ") + " cm";
+}
+
+function ColorPalette({ colors, onChange }) {
+  const [picked, setPicked] = useState("#3b82f6");
+  const add = () => {
+    if (!colors.includes(picked)) onChange([...colors, picked]);
+  };
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+      {colors.map(c => (
+        <button
+          key={c}
+          type="button"
+          title={`${c} entfernen`}
+          onClick={() => onChange(colors.filter(x => x !== c))}
+          style={{ width: 26, height: 26, borderRadius: "50%", background: c, border: "2px solid var(--border)", cursor: "pointer", padding: 0 }}
+        />
+      ))}
+      <input
+        type="color"
+        value={picked}
+        onChange={e => setPicked(e.target.value)}
+        style={{ width: 32, height: 32, border: "none", background: "none", padding: 0, cursor: "pointer" }}
+      />
+      <button
+        type="button"
+        onClick={add}
+        style={{ fontSize: 13, background: "transparent", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "5px 12px", cursor: "pointer" }}
+      >
+        + Farbe
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const [authed, setAuthed] = useState(() => !!localStorage.getItem("auth_token"));
   const [items, setItems] = useState([]);
-  const [form, setForm] = useState({ name: "", category: "", location: "", price: "" });
+  const [form, setForm] = useState(emptyForm);
   const [uploading, setUploading] = useState(null);
   const [formImage, setFormImage] = useState(null);
   const [formTags, setFormTags] = useState([]);
+  const [formColors, setFormColors] = useState([]);
   const [tagInput, setTagInput] = useState("");
   const [importUrl, setImportUrl] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [filters, setFilters] = useState(emptyFilters);
   const [importOpen, setImportOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState("");
@@ -95,6 +226,7 @@ export default function App() {
   const [editForm, setEditForm] = useState({});
   const [editTagInput, setEditTagInput] = useState("");
   const [sliderIndices, setSliderIndices] = useState({});
+  const [colorFilters, setColorFilters] = useState({});
   const [activeTags, setActiveTags] = useState([]);
   const [search, setSearch] = useState("");
 
@@ -138,20 +270,28 @@ export default function App() {
   }
 
   function clearForm() {
-    setForm({ name: "", category: "", location: "", price: "" });
+    setForm(emptyForm);
     setFormImage(null);
     setFormTags([]);
+    setFormColors([]);
     setTagInput("");
-    formFileRef.current.value = "";
+    if (formFileRef.current) formFileRef.current.value = "";
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
     try {
-      const result = await createFurniture({ ...form, price: Number(form.price), tags: formTags });
+      const result = await createFurniture({
+        ...form,
+        price: Number(form.price),
+        length: toSize(form.length), width: toSize(form.width), height: toSize(form.height),
+        tags: formTags,
+        colors: formColors,
+      });
       if (formImage && result.id) await uploadImage(result.id, formImage);
     } finally {
       clearForm();
+      setAddOpen(false);
       load();
     }
   }
@@ -162,24 +302,21 @@ export default function App() {
     setImportError("");
     try {
       const data = await scrapeUrl(importUrl);
-      setForm({ name: data.name, category: data.category, location: data.location, price: data.price || "" });
-      if (data.tags?.length) setFormTags(data.tags);
-      if (data.image_url) {
-        const result = await createFurniture({
-          name: data.name, category: data.category, location: data.location,
-          price: Number(data.price) || 0, tags: data.tags || [],
-        });
-        if (result.id) {
-          if (data.image_url) await uploadImageFromUrl(result.id, data.image_url);
-          setImportUrl("");
-          setImportOpen(false);
-          clearForm();
-          load();
-          return;
-        }
+      const result = await createFurniture({
+        name: data.name, category: data.category, subcategory: data.subcategory || "",
+        location: data.location, price: Number(data.price) || 0,
+        length: data.length ?? null, width: data.width ?? null, height: data.height ?? null,
+        tags: data.tags || [], colors: data.colors || [],
+      });
+      if (!result.id) throw new Error("Item konnte nicht angelegt werden");
+      for (const img of (data.images || []).slice(0, 12)) {
+        const uploaded = await uploadImageFromUrl(result.id, img.url);
+        if (img.color && uploaded.id) await setImageColor(result.id, uploaded.id, img.color);
       }
       setImportUrl("");
       setImportOpen(false);
+      setAddOpen(false);
+      load();
     } catch (err) {
       setImportError(err.message);
     } finally {
@@ -209,7 +346,7 @@ export default function App() {
 
   function startEdit(item) {
     setEditingId(item.id);
-    setEditForm({ name: item.name, category: item.category, location: item.location, price: item.price, tags: item.tags || [] });
+    setEditForm({ name: item.name, category: item.category, subcategory: item.subcategory || "", location: item.location, price: item.price, used: !!item.used, length: item.length ?? "", width: item.width ?? "", height: item.height ?? "", tags: item.tags || [], colors: item.colors || [] });
     setEditTagInput("");
   }
 
@@ -220,7 +357,11 @@ export default function App() {
   }
 
   async function saveEdit(id) {
-    await updateFurniture(id, { ...editForm, price: Number(editForm.price) });
+    await updateFurniture(id, {
+      ...editForm,
+      price: Number(editForm.price),
+      length: toSize(editForm.length), width: toSize(editForm.width), height: toSize(editForm.height),
+    });
     setEditingId(null);
     setEditForm({});
     setEditTagInput("");
@@ -262,19 +403,59 @@ export default function App() {
     load();
   }
 
+  function toggleColorFilter(itemId, color) {
+    setColorFilters(prev => ({ ...prev, [itemId]: prev[itemId] === color ? null : color }));
+    setSliderIndices(prev => ({ ...prev, [itemId]: 0 }));
+  }
+
+  async function handleImageColor(furnitureId, image, color) {
+    await setImageColor(furnitureId, image.id, image.color === color ? null : color);
+    load();
+  }
+
   function toggleFilter(tag) {
     setActiveTags(prev =>
       prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
     );
   }
 
+  const priceStep = 1;
+  const priceBound = Math.max(1, Math.ceil(Math.max(0, ...items.map(i => i.price || 0))));
+  const priceLo = filters.priceMin ?? 0;
+  const priceHi = filters.priceMax ?? priceBound;
+  const priceFilterActive = filters.priceMin !== null || filters.priceMax !== null;
+  const filterCategories = [...new Set(items.map(i => i.category).filter(Boolean))].sort();
+  const filterSubcategories = [...new Set(items.filter(i => i.category === filters.category).map(i => i.subcategory).filter(Boolean))].sort();
+  const filterFamilies = Object.keys(COLOR_FAMILIES).filter(f => items.some(i => (i.colors || []).some(c => colorFamily(c) === f)));
+  const sizeFilterActive = Object.values(filters.size).some(([lo, hi]) => lo !== "" || hi !== "");
+  const anyFilterActive = !!(filters.category || filters.subcategory || filters.families.length || priceFilterActive || sizeFilterActive);
+
+  function setSizeFilter(dim, i, value) {
+    setFilters(f => ({ ...f, size: { ...f.size, [dim]: f.size[dim].map((v, j) => (j === i ? value : v)) } }));
+  }
+
+  function toggleFamily(family) {
+    setFilters(f => ({ ...f, families: f.families.includes(family) ? f.families.filter(x => x !== family) : [...f.families, family] }));
+  }
+
   const filteredItems = items.filter(item => {
     if (activeTags.length && !activeTags.every(t => (item.tags || []).includes(t))) return false;
+    if (filters.category && item.category !== filters.category) return false;
+    if (filters.subcategory && item.subcategory !== filters.subcategory) return false;
+    if (filters.families.length && !(item.colors || []).some(c => filters.families.includes(colorFamily(c)))) return false;
+    if (priceFilterActive && (item.price < priceLo || item.price > priceHi)) return false;
+    for (const dim of ["length", "width", "height"]) {
+      const [lo, hi] = filters.size[dim];
+      if (lo === "" && hi === "") continue;
+      const v = item[dim];
+      if (v == null || (lo !== "" && v < Number(lo)) || (hi !== "" && v > Number(hi))) return false;
+    }
     if (search.trim()) {
       const q = search.toLowerCase();
       const matches =
         item.name?.toLowerCase().includes(q) ||
         item.category?.toLowerCase().includes(q) ||
+        item.subcategory?.toLowerCase().includes(q) ||
         item.location?.toLowerCase().includes(q) ||
         (item.tags || []).some(t => t.toLowerCase().includes(q));
       if (!matches) return false;
@@ -307,7 +488,13 @@ export default function App() {
             {items.length} {items.length === 1 ? "item" : "items"} gespeichert
           </p>
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexShrink: 0, flexWrap: "wrap" }}>
+          <button
+            onClick={() => setAddOpen(o => !o)}
+            style={{ fontSize: 14, fontWeight: 600, background: addOpen ? "transparent" : "var(--accent)", color: addOpen ? "var(--accent)" : "#fff", border: "1px solid var(--accent)", borderRadius: 8, padding: "8px 16px", cursor: "pointer", whiteSpace: "nowrap" }}
+          >
+            {addOpen ? "Schließen" : "+ Item hinzufügen"}
+          </button>
           <div style={{ position: "relative" }}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text)", opacity: 0.5, pointerEvents: "none" }}>
               <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
@@ -329,9 +516,10 @@ export default function App() {
         </div>
       </header>
 
-      <main style={{ padding: "32px", maxWidth: 1060, margin: "0 auto", width: "100%", boxSizing: "border-box", textAlign: "left" }}>
+      <main style={{ padding: "32px", maxWidth: 1320, margin: "0 auto", width: "100%", boxSizing: "border-box", textAlign: "left" }}>
 
         {/* FORM */}
+        {addOpen && (
         <div style={{ background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 16, padding: 24, marginBottom: 40 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
             <h2 style={{ margin: 0 }}>Interior Item hinzufügen</h2>
@@ -366,9 +554,12 @@ export default function App() {
           )}
           <form onSubmit={handleSubmit} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
             <input name="name"     placeholder="Name"       value={form.name}     onChange={handleChange} style={field} />
-            <input name="category" placeholder="Kategorie"   value={form.category} onChange={handleChange} style={field} />
+            <CategorySelects category={form.category} subcategory={form.subcategory} onChange={(category, subcategory) => setForm({ ...form, category, subcategory })} style={field} />
             <input name="location" placeholder="Location"   value={form.location} onChange={handleChange} style={field} />
             <input name="price"    placeholder="Preis (€)"  value={form.price}    onChange={handleChange} style={field} type="number" min="0" step="0.01" />
+            {sizeFields.map(({ key, label }) => (
+              <input key={key} name={key} placeholder={label} value={form[key]} onChange={handleChange} style={field} type="number" min="0" step="0.1" />
+            ))}
 
             <input ref={formFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={e => setFormImage(e.target.files[0] || null)} />
             <button
@@ -396,6 +587,16 @@ export default function App() {
                 {formImage ? formImage.name : "Bild hinzufügen"}
               </span>
             </button>
+
+            <label style={{ ...field, display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input type="checkbox" checked={form.used} onChange={e => setForm({ ...form, used: e.target.checked })} />
+              Schon verwendet
+            </label>
+
+            {/* COLOR PALETTE */}
+            <div style={{ gridColumn: "1 / -1", border: "1px solid var(--border)", borderRadius: 10, padding: "6px 10px", background: "var(--bg)" }}>
+              <ColorPalette colors={formColors} onChange={setFormColors} />
+            </div>
 
             {/* TAG INPUT */}
             <div style={{ gridColumn: "1 / -1", border: "1px solid var(--border)", borderRadius: 10, padding: "6px 10px", background: "var(--bg)", display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", minHeight: 42 }}>
@@ -434,6 +635,88 @@ export default function App() {
             </button>
           </form>
         </div>
+        )}
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 32, alignItems: "flex-start" }}>
+
+        {/* FILTER SIDEBAR */}
+        <aside style={{ flex: "0 0 240px", boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 20, position: "sticky", top: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h3 style={{ margin: 0, fontSize: 16, color: "var(--text-h)" }}>Filter</h3>
+            {anyFilterActive && (
+              <button
+                onClick={() => setFilters(emptyFilters)}
+                style={{ fontSize: 12, color: "var(--text)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}
+              >
+                Zurücksetzen
+              </button>
+            )}
+          </div>
+
+          <FilterSection title="Kategorie">
+            <select value={filters.category} onChange={e => setFilters({ ...filters, category: e.target.value, subcategory: "" })} style={{ ...field, padding: "8px 12px", fontSize: 14 }}>
+              <option value="">Alle Kategorien</option>
+              {filterCategories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select value={filters.subcategory} onChange={e => setFilters({ ...filters, subcategory: e.target.value })} disabled={!filters.category} style={{ ...field, padding: "8px 12px", fontSize: 14 }}>
+              <option value="">Alle Unterkategorien</option>
+              {filterSubcategories.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </FilterSection>
+
+          <FilterSection title="Preis">
+            <div style={{ fontSize: 13, color: "var(--text-h)" }}>€{priceLo} – €{priceHi}</div>
+            <input
+              type="range" min={0} max={priceBound} step={priceStep} value={priceLo}
+              onChange={e => setFilters({ ...filters, priceMin: Math.min(Number(e.target.value), priceHi), priceMax: filters.priceMax })}
+              aria-label="Mindestpreis"
+            />
+            <input
+              type="range" min={0} max={priceBound} step={priceStep} value={priceHi}
+              onChange={e => setFilters({ ...filters, priceMax: Math.max(Number(e.target.value), priceLo), priceMin: filters.priceMin })}
+              aria-label="Höchstpreis"
+            />
+          </FilterSection>
+
+          <FilterSection title="Größe (cm)">
+            {sizeFields.map(({ key, label }) => (
+              <div key={key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 12, color: "var(--text)", width: 52 }}>{label.split(" ")[0]}</span>
+                {[0, 1].map(i => (
+                  <input
+                    key={i}
+                    type="number" min="0" step="0.1"
+                    placeholder={i === 0 ? "min" : "max"}
+                    value={filters.size[key][i]}
+                    onChange={e => setSizeFilter(key, i, e.target.value)}
+                    style={{ ...field, padding: "6px 8px", fontSize: 13, width: "100%", minWidth: 0 }}
+                  />
+                ))}
+              </div>
+            ))}
+          </FilterSection>
+
+          {filterFamilies.length > 0 && (
+            <FilterSection title="Farbe">
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {filterFamilies.map(f => {
+                  const on = filters.families.includes(f);
+                  return (
+                    <button
+                      key={f}
+                      type="button"
+                      title={f}
+                      onClick={() => toggleFamily(f)}
+                      style={{ width: 26, height: 26, borderRadius: "50%", background: COLOR_FAMILIES[f], padding: 0, cursor: "pointer", border: on ? "2px solid var(--accent)" : "1px solid var(--border)", boxShadow: on ? "0 0 0 2px var(--accent-border)" : "none" }}
+                    />
+                  );
+                })}
+              </div>
+            </FilterSection>
+          )}
+        </aside>
+
+        <div style={{ flex: "1 1 560px", minWidth: 0 }}>
 
         {/* TAG FILTER BAR */}
         {allTags.length > 0 && (
@@ -478,8 +761,8 @@ export default function App() {
 
         {items.length > 0 && filteredItems.length === 0 && (
           <div style={{ textAlign: "center", padding: "60px 0", color: "var(--text)" }}>
-            <p style={{ fontSize: 16 }}>Keine Items für die gewählten Tags gefunden.</p>
-            <button onClick={() => setActiveTags([])} style={{ marginTop: 12, fontSize: 13, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+            <p style={{ fontSize: 16 }}>Keine Items für die gewählten Filter gefunden.</p>
+            <button onClick={() => { setActiveTags([]); setFilters(emptyFilters); }} style={{ marginTop: 12, fontSize: 13, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
               Filter zurücksetzen
             </button>
           </div>
@@ -488,7 +771,8 @@ export default function App() {
         {/* GRID */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 24 }}>
           {filteredItems.map((item) => {
-            const images = item.images || [];
+            const activeColor = (item.colors || []).includes(colorFilters[item.id]) ? colorFilters[item.id] : null;
+            const images = (item.images || []).filter(img => !activeColor || img.color === activeColor);
             const idx = sliderIdx(item.id, images.length);
 
             return (
@@ -544,6 +828,21 @@ export default function App() {
                         title="Bild hinzufügen"
                       >+</button>
 
+                      {/* Assign color to current image */}
+                      {(item.colors || []).length > 0 && (
+                        <div style={{ position: "absolute", bottom: 6, left: 8, display: "flex", gap: 4 }}>
+                          {item.colors.map(c => (
+                            <button
+                              key={c}
+                              type="button"
+                              title={images[idx].color === c ? "Farbzuordnung entfernen" : `Bild der Farbe ${c} zuordnen`}
+                              onClick={() => handleImageColor(item.id, images[idx], c)}
+                              style={{ width: 16, height: 16, borderRadius: "50%", background: c, padding: 0, cursor: "pointer", border: images[idx].color === c ? "2px solid #fff" : "1px solid rgba(255,255,255,0.6)", boxShadow: "0 0 0 1px rgba(0,0,0,0.35)" }}
+                            />
+                          ))}
+                        </div>
+                      )}
+
                       {/* Dots */}
                       {images.length > 1 && (
                         <div style={{ position: "absolute", bottom: 8, left: 0, right: 0, display: "flex", justifyContent: "center", gap: 5 }}>
@@ -557,6 +856,10 @@ export default function App() {
                         </div>
                       )}
                     </>
+                  ) : activeColor ? (
+                    <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text)", fontSize: 13 }}>
+                      Keine Bilder in dieser Farbe
+                    </div>
                   ) : uploading === item.id ? (
                     <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text)", fontSize: 13 }}>
                       Wird hochgeladen…
@@ -582,9 +885,9 @@ export default function App() {
                       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
                         {[
                           { key: "name", label: "Name" },
-                          { key: "category", label: "Kategorie" },
                           { key: "location", label: "Ort" },
                           { key: "price", label: "Preis (€)", type: "number", step: "0.01" },
+                          ...sizeFields.map(f => ({ ...f, type: "number", step: "0.1" })),
                         ].map(({ key, label, type = "text", step }) => (
                           <label key={key} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                             <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text)", textTransform: "uppercase", letterSpacing: "0.6px" }}>{label}</span>
@@ -597,6 +900,23 @@ export default function App() {
                             />
                           </label>
                         ))}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+                        <CategorySelects
+                          labeled
+                          category={editForm.category}
+                          subcategory={editForm.subcategory}
+                          onChange={(category, subcategory) => setEditForm({ ...editForm, category, subcategory })}
+                          style={{ ...field, padding: "8px 12px", fontSize: 14 }}
+                        />
+                      </div>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: "var(--text-h)", marginBottom: 12, cursor: "pointer" }}>
+                        <input type="checkbox" checked={!!editForm.used} onChange={e => setEditForm({ ...editForm, used: e.target.checked })} />
+                        Schon verwendet
+                      </label>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 12 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text)", textTransform: "uppercase", letterSpacing: "0.6px" }}>Farben</span>
+                        <ColorPalette colors={editForm.colors || []} onChange={colors => setEditForm({ ...editForm, colors })} />
                       </div>
                       <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                         <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text)", textTransform: "uppercase", letterSpacing: "0.6px" }}>Tags</span>
@@ -656,6 +976,19 @@ export default function App() {
                             </button>
                           );
                         })}
+                        <button
+                          type="button"
+                          title="Klicken zum Umschalten"
+                          onClick={async () => { await updateFurniture(item.id, { used: !item.used }); load(); }}
+                          style={{
+                            fontSize: 12, fontWeight: 600, borderRadius: 20, padding: "2px 10px", cursor: "pointer",
+                            border: item.used ? "1px solid #16a34a" : "1px solid var(--border)",
+                            background: item.used ? "#16a34a" : "transparent",
+                            color: item.used ? "#fff" : "var(--text)",
+                          }}
+                        >
+                          {item.used ? "✓ Verwendet" : "Nicht verwendet"}
+                        </button>
                         {item.location && (() => {
                           const parsed = normalizeUrl(item.location);
                           return parsed ? (
@@ -674,9 +1007,27 @@ export default function App() {
                         {item.name}
                       </h3>
                       {item.category && (
-                        <p style={{ margin: "0 0 14px", fontSize: 13, color: "var(--text)" }}>{item.category}</p>
+                        <p style={{ margin: "0 0 14px", fontSize: 13, color: "var(--text)" }}>
+                          {item.category}{item.subcategory ? ` › ${item.subcategory}` : ""}
+                        </p>
                       )}
                       {!item.category && <div style={{ marginBottom: 14 }} />}
+                      {(item.colors || []).length > 0 && (
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "-8px 0 12px" }}>
+                          {item.colors.map(c => (
+                            <button
+                              key={c}
+                              type="button"
+                              title={activeColor === c ? "Filter aufheben" : `Bilder in ${c} zeigen`}
+                              onClick={() => toggleColorFilter(item.id, c)}
+                              style={{ width: 20, height: 20, borderRadius: "50%", background: c, padding: 0, cursor: "pointer", border: activeColor === c ? "2px solid var(--accent)" : "1px solid var(--border)", boxShadow: activeColor === c ? "0 0 0 2px var(--accent-border)" : "none" }}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      {formatSize(item) && (
+                        <p style={{ margin: "-8px 0 14px", fontSize: 13, color: "var(--text)" }}>Größe: {formatSize(item)}</p>
+                      )}
 
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                         <span style={{ fontSize: 20, fontWeight: 700, color: "var(--text-h)" }}>€{item.price}</span>
@@ -703,6 +1054,8 @@ export default function App() {
           })}
         </div>
 
+        </div>
+        </div>
       </main>
     </div>
   );

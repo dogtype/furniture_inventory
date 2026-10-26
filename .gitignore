@@ -1,5 +1,6 @@
 # Credentials & secrets
 backend/start.sh
+backend/start-local.sh
 frontend/start.sh
 *.pem
 *.key
@@ -25,4 +26,5 @@ frontend/dist/
 
 # Misc
 .env
+.env.local
 .DS_Store
