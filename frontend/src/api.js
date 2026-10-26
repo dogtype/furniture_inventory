@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_API_URL ?? "https://89.244.85.149:1919";
+const API_URL = import.meta.env.VITE_API_URL ?? "https://raspberrypi.tail3ed2e1.ts.net";
 
 function getToken() {
   return localStorage.getItem("auth_token");

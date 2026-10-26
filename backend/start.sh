@@ -4,11 +4,12 @@
 cd "$(dirname "$0")" || exit 1
 
 # Setup check: Python environment
-if [ ! -f venv/bin/activate ]; then
-    echo "Python-Umgebung (venv) fehlt, wird erstellt..."
-    if ! python3 -m venv venv; then
+if [ ! -f venv/bin/activate ] || ! venv/bin/python -m pip --version > /dev/null 2>&1; then
+    echo "Python-Umgebung (venv) fehlt oder ist unvollständig, wird neu erstellt..."
+    rm -rf venv
+    if ! python3 -m venv venv || ! venv/bin/python -m pip --version > /dev/null 2>&1; then
         rm -rf venv
-        echo "venv konnte nicht erstellt werden. Auf dem Pi hilft: sudo apt install python3-venv"
+        echo "venv konnte nicht erstellt werden. Auf dem Pi hilft: sudo apt install python3-venv python3-full"
         exit 1
     fi
 fi
@@ -20,7 +21,7 @@ STAMP=venv/.requirements.sha256
 CURRENT=$(sha256sum requirements.txt | cut -d' ' -f1)
 if [ ! -f "$STAMP" ] || [ "$(cat "$STAMP")" != "$CURRENT" ] || ! command -v uvicorn > /dev/null; then
     echo "Installiere Python-Pakete..."
-    pip install -r requirements.txt || exit 1
+    venv/bin/python -m pip install -r requirements.txt || exit 1
     echo "$CURRENT" > "$STAMP"
 fi
 
