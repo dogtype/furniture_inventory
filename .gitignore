@@ -1,5 +1,4 @@
 # Credentials & secrets
-backend/start.sh
 backend/start-local.sh
 frontend/start.sh
 *.pem
