@@ -227,6 +227,8 @@ export default function App() {
   const [editTagInput, setEditTagInput] = useState("");
   const [sliderIndices, setSliderIndices] = useState({});
   const [colorFilters, setColorFilters] = useState({});
+  // Image whose color was just changed. It stays in the slider even if it no longer matches the color filter.
+  const [pinnedImages, setPinnedImages] = useState({});
   const [activeTags, setActiveTags] = useState([]);
   const [search, setSearch] = useState("");
 
@@ -403,12 +405,23 @@ export default function App() {
     load();
   }
 
+  function clearPin(itemId) {
+    setPinnedImages(prev => {
+      if (!(itemId in prev)) return prev;
+      const next = { ...prev };
+      delete next[itemId];
+      return next;
+    });
+  }
+
   function toggleColorFilter(itemId, color) {
+    clearPin(itemId);
     setColorFilters(prev => ({ ...prev, [itemId]: prev[itemId] === color ? null : color }));
     setSliderIndices(prev => ({ ...prev, [itemId]: 0 }));
   }
 
   async function handleImageColor(furnitureId, image, color) {
+    setPinnedImages(prev => ({ ...prev, [furnitureId]: image.id }));
     await setImageColor(furnitureId, image.id, image.color === color ? null : color);
     load();
   }
@@ -428,7 +441,7 @@ export default function App() {
   const filterSubcategories = [...new Set(items.filter(i => i.category === filters.category).map(i => i.subcategory).filter(Boolean))].sort();
   const filterFamilies = Object.keys(COLOR_FAMILIES).filter(f => items.some(i => (i.colors || []).some(c => colorFamily(c) === f)));
   const sizeFilterActive = Object.values(filters.size).some(([lo, hi]) => lo !== "" || hi !== "");
-  const anyFilterActive = !!(filters.category || filters.subcategory || filters.families.length || priceFilterActive || sizeFilterActive);
+  const anyFilterActive = !!(filters.category || filters.subcategory || filters.families.length || priceFilterActive || sizeFilterActive || activeTags.length);
 
   function setSizeFilter(dim, i, value) {
     setFilters(f => ({ ...f, size: { ...f.size, [dim]: f.size[dim].map((v, j) => (j === i ? value : v)) } }));
@@ -470,6 +483,7 @@ export default function App() {
   }
 
   function navigate(itemId, delta, length) {
+    clearPin(itemId);
     const current = sliderIdx(itemId, length);
     setSliderIndices(prev => ({ ...prev, [itemId]: (current + delta + length) % length }));
   }
@@ -484,7 +498,7 @@ export default function App() {
       <header style={{ padding: "48px 32px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
         <div style={{ textAlign: "left" }}>
           <h1 style={{ margin: 0 }}>Julias Interior Store</h1>
-          <p style={{ marginTop: 6, color: "var(--text)", fontSize: 15 }}>
+          <p style={{ marginTop: 14, color: "var(--text)", fontSize: 15 }}>
             {items.length} {items.length === 1 ? "item" : "items"} gespeichert
           </p>
         </div>
@@ -645,7 +659,7 @@ export default function App() {
             <h3 style={{ margin: 0, fontSize: 16, color: "var(--text-h)" }}>Filter</h3>
             {anyFilterActive && (
               <button
-                onClick={() => setFilters(emptyFilters)}
+                onClick={() => { setFilters(emptyFilters); setActiveTags([]); }}
                 style={{ fontSize: 12, color: "var(--text)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}
               >
                 Zurücksetzen
@@ -714,42 +728,34 @@ export default function App() {
               </div>
             </FilterSection>
           )}
+          {allTags.length > 0 && (
+            <FilterSection title="Tags">
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 200, overflowY: "auto" }}>
+                {allTags.map(tag => {
+                  const active = activeTags.includes(tag);
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => toggleFilter(tag)}
+                      style={{
+                        fontSize: 12, fontWeight: 600, borderRadius: 20, padding: "3px 12px", cursor: "pointer",
+                        border: active ? "1px solid var(--accent)" : "1px solid var(--border)",
+                        background: active ? "var(--accent)" : "var(--bg)",
+                        color: active ? "#fff" : "var(--text)",
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      {tag}
+                    </button>
+                  );
+                })}
+              </div>
+            </FilterSection>
+          )}
         </aside>
 
         <div style={{ flex: "1 1 560px", minWidth: 0 }}>
-
-        {/* TAG FILTER BAR */}
-        {allTags.length > 0 && (
-          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 24 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", textTransform: "uppercase", letterSpacing: "0.6px", flexShrink: 0 }}>Filter</span>
-            {allTags.map(tag => {
-              const active = activeTags.includes(tag);
-              return (
-                <button
-                  key={tag}
-                  onClick={() => toggleFilter(tag)}
-                  style={{
-                    fontSize: 12, fontWeight: 600, borderRadius: 20, padding: "3px 12px", cursor: "pointer",
-                    border: active ? "1px solid var(--accent)" : "1px solid var(--border)",
-                    background: active ? "var(--accent)" : "var(--bg)",
-                    color: active ? "#fff" : "var(--text)",
-                    transition: "all 0.15s",
-                  }}
-                >
-                  {tag}
-                </button>
-              );
-            })}
-            {activeTags.length > 0 && (
-              <button
-                onClick={() => setActiveTags([])}
-                style={{ fontSize: 12, color: "var(--text)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline", opacity: 0.6 }}
-              >
-                Zurücksetzen
-              </button>
-            )}
-          </div>
-        )}
 
         {/* EMPTY STATE */}
         {items.length === 0 && (
@@ -772,7 +778,7 @@ export default function App() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 24 }}>
           {filteredItems.map((item) => {
             const activeColor = (item.colors || []).includes(colorFilters[item.id]) ? colorFilters[item.id] : null;
-            const images = (item.images || []).filter(img => !activeColor || img.color === activeColor);
+            const images = (item.images || []).filter(img => !activeColor || img.color === activeColor || img.id === pinnedImages[item.id]);
             const idx = sliderIdx(item.id, images.length);
 
             return (
@@ -791,7 +797,7 @@ export default function App() {
               >
                 {/* IMAGE SLIDER */}
                 <div
-                  style={{ position: "relative", height: 156, background: "var(--code-bg)", overflow: "hidden" }}
+                  style={{ position: "relative", aspectRatio: "1 / 1", background: "var(--code-bg)", overflow: "hidden" }}
                 >
                   {images.length > 0 ? (
                     <>
@@ -849,7 +855,7 @@ export default function App() {
                           {images.map((_, i) => (
                             <div
                               key={i}
-                              onClick={() => setSliderIndices(prev => ({ ...prev, [item.id]: i }))}
+                              onClick={() => { clearPin(item.id); setSliderIndices(prev => ({ ...prev, [item.id]: i })); }}
                               style={{ width: 6, height: 6, borderRadius: "50%", background: i === idx ? "#fff" : "rgba(255,255,255,0.45)", cursor: "pointer", transition: "background 0.15s" }}
                             />
                           ))}
