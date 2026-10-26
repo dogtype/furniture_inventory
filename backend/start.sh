@@ -19,7 +19,7 @@ source venv/bin/activate
 # Setup check: install dependencies when requirements.txt is new or has changed
 STAMP=venv/.requirements.sha256
 CURRENT=$(sha256sum requirements.txt | cut -d' ' -f1)
-if [ ! -f "$STAMP" ] || [ "$(cat "$STAMP")" != "$CURRENT" ] || ! command -v uvicorn > /dev/null; then
+if [ ! -f "$STAMP" ] || [ "$(cat "$STAMP")" != "$CURRENT" ] || ! venv/bin/python -c "import uvicorn" 2> /dev/null; then
     echo "Installiere Python-Pakete..."
     venv/bin/python -m pip install -r requirements.txt || exit 1
     echo "$CURRENT" > "$STAMP"
@@ -81,9 +81,12 @@ PY
 }
 
 # Checks hourly, so a backup is made about once a day while the server runs
-( while true; do backup_db; sleep 3600; done ) &
+mkdir -p "$BACKUP_DIR"
+( while true; do backup_db; sleep 3600; done ) >> "$BACKUP_DIR/backup.log" 2>&1 &
 BACKUP_PID=$!
-trap 'kill $BACKUP_PID 2> /dev/null' EXIT
+# Stop the loop and its waiting "sleep" child when the script ends
+trap 'pkill -P $BACKUP_PID 2> /dev/null; kill $BACKUP_PID 2> /dev/null' EXIT
 
-uvicorn app.main:app --reload --port 1919 --host 127.0.0.1
+# "python -m uvicorn" does not depend on the venv/bin/uvicorn script
+venv/bin/python -m uvicorn app.main:app --reload --port 1919 --host 127.0.0.1
 
