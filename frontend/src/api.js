@@ -55,6 +55,8 @@ export async function getFurniture() {
   const response = await request(`${API_URL}/furniture`, {
     headers: authHeaders(),
   });
+  // On 401 (expired or invalid token) request() has already logged the user out
+  if (!response.ok) return [];
   return response.json();
 }
 

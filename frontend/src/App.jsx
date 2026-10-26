@@ -117,6 +117,32 @@ function colorFamily(hex) {
   return "Rosa";
 }
 
+// Range slider with two thumbs (two overlapping range inputs, styled in index.css)
+function DualRange({ min, max, step = 1, low, high, onChange }) {
+  const ratio = v => (max === min ? 0 : (v - min) / (max - min));
+  // the thumb center does not reach the track ends, by half a thumb (10px)
+  const pos = v => `calc(${ratio(v) * 100}% + ${(0.5 - ratio(v)) * 20}px)`;
+  const nearRightEnd = ratio(low) > 0.5 && ratio(high) - ratio(low) < 0.1;
+  return (
+    <div className="dual-range">
+      <div className="dual-range-track" />
+      <div className="dual-range-fill" style={{ left: pos(low), right: `calc(100% - ${pos(high)})` }} />
+      <input
+        type="range" min={min} max={max} step={step} value={low}
+        onChange={e => onChange(Math.min(Number(e.target.value), high), high)}
+        style={{ zIndex: nearRightEnd ? 4 : 2 }}
+        aria-label="Mindestpreis"
+      />
+      <input
+        type="range" min={min} max={max} step={step} value={high}
+        onChange={e => onChange(low, Math.max(Number(e.target.value), low))}
+        style={{ zIndex: 3 }}
+        aria-label="Höchstpreis"
+      />
+    </div>
+  );
+}
+
 function FilterSection({ title, children }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -187,7 +213,7 @@ function ColorPalette({ colors, onChange }) {
           type="button"
           title={`${c} entfernen`}
           onClick={() => onChange(colors.filter(x => x !== c))}
-          style={{ width: 26, height: 26, borderRadius: "50%", background: c, border: "2px solid var(--border)", cursor: "pointer", padding: 0 }}
+          style={{ width: 30, height: 30, borderRadius: "50%", background: c, border: "2px solid var(--border)", cursor: "pointer", padding: 0 }}
         />
       ))}
       <input
@@ -205,6 +231,18 @@ function ColorPalette({ colors, onChange }) {
       </button>
     </div>
   );
+}
+
+function useMediaQuery(query) {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const m = window.matchMedia(query);
+    const onChange = () => setMatches(m.matches);
+    onChange();
+    m.addEventListener("change", onChange);
+    return () => m.removeEventListener("change", onChange);
+  }, [query]);
+  return matches;
 }
 
 export default function App() {
@@ -231,6 +269,9 @@ export default function App() {
   const [pinnedImages, setPinnedImages] = useState({});
   const [activeTags, setActiveTags] = useState([]);
   const [search, setSearch] = useState("");
+  const narrow = useMediaQuery("(max-width: 900px)");
+  const touch = useMediaQuery("(pointer: coarse)");
+  const [filterOpen, setFilterOpen] = useState(false);
 
   const fileInputRef = useRef(null);
   const formFileRef = useRef(null);
@@ -495,21 +536,21 @@ export default function App() {
       <input ref={fileInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleFileChange} />
 
       {/* HEADER */}
-      <header style={{ padding: "48px 32px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
+      <header style={{ padding: narrow ? "24px 16px 16px" : "48px 32px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
         <div style={{ textAlign: "left" }}>
           <h1 style={{ margin: 0 }}>Julias Interior Store</h1>
           <p style={{ marginTop: 14, color: "var(--text)", fontSize: 15 }}>
             {items.length} {items.length === 1 ? "item" : "items"} gespeichert
           </p>
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexShrink: 0, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flex: "1 1 320px", justifyContent: "flex-end", flexWrap: "wrap" }}>
           <button
             onClick={() => setAddOpen(o => !o)}
             style={{ fontSize: 14, fontWeight: 600, background: addOpen ? "transparent" : "var(--accent)", color: addOpen ? "var(--accent)" : "#fff", border: "1px solid var(--accent)", borderRadius: 8, padding: "8px 16px", cursor: "pointer", whiteSpace: "nowrap" }}
           >
             {addOpen ? "Schließen" : "+ Item hinzufügen"}
           </button>
-          <div style={{ position: "relative" }}>
+          <div style={{ position: "relative", flex: "1 1 160px", minWidth: 140, maxWidth: 260 }}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text)", opacity: 0.5, pointerEvents: "none" }}>
               <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
             </svg>
@@ -518,7 +559,7 @@ export default function App() {
               placeholder="Suchen…"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              style={{ ...field, width: 220, paddingLeft: 36, fontSize: 14 }}
+              style={{ ...field, paddingLeft: 36, fontSize: 14 }}
             />
           </div>
           <button
@@ -530,11 +571,11 @@ export default function App() {
         </div>
       </header>
 
-      <main style={{ padding: "32px", maxWidth: 1320, margin: "0 auto", width: "100%", boxSizing: "border-box", textAlign: "left" }}>
+      <main style={{ padding: narrow ? "16px" : "32px", maxWidth: 1320, margin: "0 auto", width: "100%", boxSizing: "border-box", textAlign: "left" }}>
 
         {/* FORM */}
         {addOpen && (
-        <div style={{ background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 16, padding: 24, marginBottom: 40 }}>
+        <div style={{ background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 16, padding: narrow ? 16 : 24, marginBottom: narrow ? 24 : 40 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
             <h2 style={{ margin: 0 }}>Interior Item hinzufügen</h2>
             <button
@@ -651,10 +692,21 @@ export default function App() {
         </div>
         )}
 
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 32, alignItems: "flex-start" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: narrow ? 16 : 32, alignItems: "flex-start" }}>
+
+        {narrow && (
+          <button
+            type="button"
+            onClick={() => setFilterOpen(o => !o)}
+            style={{ flex: "1 1 100%", fontSize: 14, fontWeight: 600, background: "var(--bg)", color: anyFilterActive ? "var(--accent)" : "var(--text-h)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 16px", cursor: "pointer", textAlign: "left" }}
+          >
+            {filterOpen ? "Filter ausblenden" : `Filter anzeigen${anyFilterActive ? " (aktiv)" : ""}`}
+          </button>
+        )}
 
         {/* FILTER SIDEBAR */}
-        <aside style={{ flex: "0 0 240px", boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 20, position: "sticky", top: 16 }}>
+        {(!narrow || filterOpen) && (
+        <aside style={{ flex: narrow ? "1 1 100%" : "0 0 240px", boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 20, position: narrow ? "static" : "sticky", top: 16, maxHeight: narrow ? "none" : "calc(100vh - 32px)", overflowY: narrow ? "visible" : "auto" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <h3 style={{ margin: 0, fontSize: 16, color: "var(--text-h)" }}>Filter</h3>
             {anyFilterActive && (
@@ -680,15 +732,13 @@ export default function App() {
 
           <FilterSection title="Preis">
             <div style={{ fontSize: 13, color: "var(--text-h)" }}>€{priceLo} – €{priceHi}</div>
-            <input
-              type="range" min={0} max={priceBound} step={priceStep} value={priceLo}
-              onChange={e => setFilters({ ...filters, priceMin: Math.min(Number(e.target.value), priceHi), priceMax: filters.priceMax })}
-              aria-label="Mindestpreis"
-            />
-            <input
-              type="range" min={0} max={priceBound} step={priceStep} value={priceHi}
-              onChange={e => setFilters({ ...filters, priceMax: Math.max(Number(e.target.value), priceLo), priceMin: filters.priceMin })}
-              aria-label="Höchstpreis"
+            <DualRange
+              min={0}
+              max={priceBound}
+              step={priceStep}
+              low={priceLo}
+              high={priceHi}
+              onChange={(lo, hi) => setFilters({ ...filters, priceMin: lo <= 0 ? null : lo, priceMax: hi >= priceBound ? null : hi })}
             />
           </FilterSection>
 
@@ -721,7 +771,7 @@ export default function App() {
                       type="button"
                       title={f}
                       onClick={() => toggleFamily(f)}
-                      style={{ width: 26, height: 26, borderRadius: "50%", background: COLOR_FAMILIES[f], padding: 0, cursor: "pointer", border: on ? "2px solid var(--accent)" : "1px solid var(--border)", boxShadow: on ? "0 0 0 2px var(--accent-border)" : "none" }}
+                      style={{ width: touch ? 34 : 26, height: touch ? 34 : 26, borderRadius: "50%", background: COLOR_FAMILIES[f], padding: 0, cursor: "pointer", border: on ? "2px solid var(--accent)" : "1px solid var(--border)", boxShadow: on ? "0 0 0 2px var(--accent-border)" : "none" }}
                     />
                   );
                 })}
@@ -754,8 +804,9 @@ export default function App() {
             </FilterSection>
           )}
         </aside>
+        )}
 
-        <div style={{ flex: "1 1 560px", minWidth: 0 }}>
+        <div style={{ flex: narrow ? "1 1 100%" : "1 1 560px", minWidth: 0 }}>
 
         {/* EMPTY STATE */}
         {items.length === 0 && (
@@ -775,7 +826,7 @@ export default function App() {
         )}
 
         {/* GRID */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 24 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 24 }}>
           {filteredItems.map((item) => {
             const activeColor = (item.colors || []).includes(colorFilters[item.id]) ? colorFilters[item.id] : null;
             const images = (item.images || []).filter(img => !activeColor || img.color === activeColor || img.id === pinnedImages[item.id]);
@@ -804,7 +855,7 @@ export default function App() {
                       <img
                         src={imageUrl(images[idx].filename)}
                         alt={item.name}
-                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                        style={{ width: "100%", height: "100%", objectFit: "contain" }}
                       />
 
                       {/* Prev / Next */}
@@ -812,11 +863,11 @@ export default function App() {
                         <>
                           <button
                             onClick={() => navigate(item.id, -1, images.length)}
-                            style={{ ...overlayBtn, position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", width: 28, height: 28, fontSize: 16 }}
+                            style={{ ...overlayBtn, position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", width: touch ? 38 : 28, height: touch ? 38 : 28, fontSize: 16 }}
                           >‹</button>
                           <button
                             onClick={() => navigate(item.id, 1, images.length)}
-                            style={{ ...overlayBtn, position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", width: 28, height: 28, fontSize: 16 }}
+                            style={{ ...overlayBtn, position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", width: touch ? 38 : 28, height: touch ? 38 : 28, fontSize: 16 }}
                           >›</button>
                         </>
                       )}
@@ -824,13 +875,13 @@ export default function App() {
                       {/* Delete current image */}
                       <button
                         onClick={() => handleDeleteImage(item.id, images[idx].id, idx, images.length)}
-                        style={{ ...overlayBtn, position: "absolute", top: 8, right: 8, width: 24, height: 24, fontSize: 14 }}
+                        style={{ ...overlayBtn, position: "absolute", top: 8, right: 8, width: touch ? 34 : 24, height: touch ? 34 : 24, fontSize: 14 }}
                       >×</button>
 
                       {/* Add image */}
                       <button
                         onClick={() => handleUploadClick(item.id)}
-                        style={{ ...overlayBtn, position: "absolute", top: 8, left: 8, width: 24, height: 24, fontSize: 16 }}
+                        style={{ ...overlayBtn, position: "absolute", top: 8, left: 8, width: touch ? 34 : 24, height: touch ? 34 : 24, fontSize: 16 }}
                         title="Bild hinzufügen"
                       >+</button>
 
@@ -843,7 +894,7 @@ export default function App() {
                               type="button"
                               title={images[idx].color === c ? "Farbzuordnung entfernen" : `Bild der Farbe ${c} zuordnen`}
                               onClick={() => handleImageColor(item.id, images[idx], c)}
-                              style={{ width: 16, height: 16, borderRadius: "50%", background: c, padding: 0, cursor: "pointer", border: images[idx].color === c ? "2px solid #fff" : "1px solid rgba(255,255,255,0.6)", boxShadow: "0 0 0 1px rgba(0,0,0,0.35)" }}
+                              style={{ width: touch ? 24 : 16, height: touch ? 24 : 16, borderRadius: "50%", background: c, padding: 0, cursor: "pointer", border: images[idx].color === c ? "2px solid #fff" : "1px solid rgba(255,255,255,0.6)", boxShadow: "0 0 0 1px rgba(0,0,0,0.35)" }}
                             />
                           ))}
                         </div>
@@ -851,13 +902,15 @@ export default function App() {
 
                       {/* Dots */}
                       {images.length > 1 && (
-                        <div style={{ position: "absolute", bottom: 8, left: 0, right: 0, display: "flex", justifyContent: "center", gap: 5 }}>
+                        <div style={{ position: "absolute", bottom: touch ? 0 : 8, left: 0, right: 0, display: "flex", justifyContent: "center", gap: touch ? 0 : 5 }}>
                           {images.map((_, i) => (
                             <div
                               key={i}
                               onClick={() => { clearPin(item.id); setSliderIndices(prev => ({ ...prev, [item.id]: i })); }}
-                              style={{ width: 6, height: 6, borderRadius: "50%", background: i === idx ? "#fff" : "rgba(255,255,255,0.45)", cursor: "pointer", transition: "background 0.15s" }}
-                            />
+                              style={{ padding: touch ? "12px 7px" : 0, cursor: "pointer" }}
+                            >
+                              <div style={{ width: 6, height: 6, borderRadius: "50%", background: i === idx ? "#fff" : "rgba(255,255,255,0.45)", transition: "background 0.15s" }} />
+                            </div>
                           ))}
                         </div>
                       )}
@@ -1026,7 +1079,7 @@ export default function App() {
                               type="button"
                               title={activeColor === c ? "Filter aufheben" : `Bilder in ${c} zeigen`}
                               onClick={() => toggleColorFilter(item.id, c)}
-                              style={{ width: 20, height: 20, borderRadius: "50%", background: c, padding: 0, cursor: "pointer", border: activeColor === c ? "2px solid var(--accent)" : "1px solid var(--border)", boxShadow: activeColor === c ? "0 0 0 2px var(--accent-border)" : "none" }}
+                              style={{ width: touch ? 28 : 20, height: touch ? 28 : 20, borderRadius: "50%", background: c, padding: 0, cursor: "pointer", border: activeColor === c ? "2px solid var(--accent)" : "1px solid var(--border)", boxShadow: activeColor === c ? "0 0 0 2px var(--accent-border)" : "none" }}
                             />
                           ))}
                         </div>
@@ -1035,7 +1088,7 @@ export default function App() {
                         <p style={{ margin: "-8px 0 14px", fontSize: 13, color: "var(--text)" }}>Größe: {formatSize(item)}</p>
                       )}
 
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
                         <span style={{ fontSize: 20, fontWeight: 700, color: "var(--text-h)" }}>€{item.price}</span>
                         <div style={{ display: "flex", gap: 6 }}>
                           <button
