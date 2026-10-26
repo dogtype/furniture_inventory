@@ -48,6 +48,18 @@ async def lifespan(app: FastAPI):
     conn = get_connection()
     cursor = conn.cursor()
 
+    # Main table (created on a fresh database; later columns are added below)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS furniture (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            category TEXT,
+            location TEXT,
+            price REAL
+        )
+    """)
+    conn.commit()
+
     # Ensure legacy image_path column exists
     try:
         cursor.execute("ALTER TABLE furniture ADD COLUMN image_path TEXT")
