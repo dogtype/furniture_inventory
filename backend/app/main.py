@@ -338,7 +338,7 @@ async def check_links(_=Depends(verify_token)):
 def get_furniture(_=Depends(verify_token)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM furniture")
+    cursor.execute("SELECT * FROM furniture ORDER BY id DESC")  # newest first
     items = [dict(row) for row in cursor.fetchall()]
     images_by_id, tags_by_id, colors_by_id = _fetch_related(cursor)
     conn.close()
