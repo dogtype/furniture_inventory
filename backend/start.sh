@@ -37,9 +37,23 @@ if [ ! -f .env ]; then
     echo "backend/.env fehlt. Kopiere .env.example nach .env und trage Passwort und SECRET_KEY ein."
     exit 1
 fi
-set -a
-source .env
-set +a
+# Only APP_PASSWORD and SECRET_KEY are read, the file itself is never executed
+while IFS='=' read -r key value || [ -n "$key" ]; do
+    value="${value%$'\r'}"
+    case "$key" in
+        APP_PASSWORD|SECRET_KEY)
+            if [[ "$value" == \"*\" ]]; then
+                value="${value#\"}"
+                value="${value%\"}"
+            elif [[ "$value" == *" "* ]]; then
+                echo "In backend/.env enthält der Wert von $key ein Leerzeichen."
+                echo "Pro Zeile darf nur NAME=Wert stehen, kein weiterer Befehl. Werte mit Leerzeichen gehören in Anführungszeichen."
+                exit 1
+            fi
+            export "$key=$value"
+            ;;
+    esac
+done < .env
 if [ -z "$APP_PASSWORD" ] || [ -z "$SECRET_KEY" ]; then
     echo "APP_PASSWORD oder SECRET_KEY fehlt in backend/.env."
     exit 1
