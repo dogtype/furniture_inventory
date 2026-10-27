@@ -362,6 +362,15 @@ async def import_page(request: Request, dry_run: bool = False, x_import_key: str
     if not IMPORT_KEY:
         return _import_reply(503, "Der Import ist im Backend nicht eingerichtet (IMPORT_KEY fehlt in backend/.env).")
     if not x_import_key or not hmac.compare_digest(x_import_key.strip(), IMPORT_KEY):
+        # Only in the server log (never in the reply), so a mistyped key can be diagnosed without showing it
+        got = x_import_key or ""
+        log.warning(
+            "Import: wrong key. received %d chars (expected %d), differs only by case: %s, "
+            "whitespace/invisible chars: %s, non-ASCII chars: %s, starts like expected: %s",
+            len(got), len(IMPORT_KEY), got.strip().lower() == IMPORT_KEY.lower(),
+            got != got.strip() or any(not c.isprintable() for c in got),
+            any(ord(c) > 127 for c in got), got[:1] == IMPORT_KEY[:1],
+        )
         return _import_reply(401, "Falscher Import-Schlüssel. Prüfe den Header X-Import-Key im Kurzbefehl.")
     # The shortcut may send the JSON as a quoted string (JSON inside a JSON string), so unpack up to twice
     try:
