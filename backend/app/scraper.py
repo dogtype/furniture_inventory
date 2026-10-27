@@ -391,6 +391,9 @@ def parse_product(html: str, url: str) -> dict:
     if not name:
         title = soup.find("title")
         name = title.get_text(strip=True).split("|")[0].strip() if title else ""
+    if not images:
+        # large images that the iPad shortcut found on the page
+        images = [img["src"] for img in soup.select("img[data-import-image]") if img.get("src", "").startswith("http")]
     if not images and meta("og:image"):
         images = [meta("og:image")]
     if not price:

@@ -1,5 +1,7 @@
 # app/main.py
 
+import hmac
+import logging
 import os
 import uuid
 import shutil
@@ -10,7 +12,8 @@ from datetime import datetime, timedelta, timezone
 import re
 import httpx
 import jwt
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Header
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -22,10 +25,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-in-production")
 APP_PASSWORD = os.getenv("APP_PASSWORD", "changeme")
+# Key for the iPad shortcut (see docs/kurzbefehl-import.md). Without it the page import is switched off.
+IMPORT_KEY = os.getenv("IMPORT_KEY", "")
+MAX_IMPORT_IMAGES = 12
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_DAYS = 30
 
 security = HTTPBearer()
+log = logging.getLogger("main")
 
 
 def create_token() -> str:
@@ -286,32 +293,30 @@ class ImageUrlRequest(BaseModel):
     url: str
 
 
-@app.post("/furniture/{item_id}/image-url")
-async def upload_image_from_url(item_id: int, body: ImageUrlRequest, _=Depends(verify_token)):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM furniture WHERE id = ?", (item_id,))
-    if not cursor.fetchone():
-        conn.close()
-        raise HTTPException(status_code=404, detail="Item not found")
-
-    try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
-            r = await client.get(body.url, headers={"User-Agent": "Mozilla/5.0"})
-        r.raise_for_status()
-    except Exception as e:
-        conn.close()
-        raise HTTPException(status_code=422, detail=f"Bild konnte nicht geladen werden: {e}")
-
-    content_type = r.headers.get("content-type", "image/jpeg")
-    ext = "." + content_type.split("/")[-1].split(";")[0].strip() if "/" in content_type else ".jpg"
-    if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+async def _download_image(url: str, referer: str | None = None) -> tuple[bytes, str]:
+    """Downloads an image and returns its bytes and file extension. Raises on errors or non-images."""
+    headers = {**scraper.HEADERS, "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"}
+    if referer:
+        headers["Referer"] = referer
+    async with httpx.AsyncClient(follow_redirects=True, timeout=15, headers=headers) as client:
+        r = await client.get(url)
+    r.raise_for_status()
+    content_type = r.headers.get("content-type", "").split(";")[0].strip().lower()
+    if not content_type.startswith("image/"):
+        # e.g. an HTML page of a bot protection instead of the image
+        raise ValueError(f"kein Bild ({content_type or 'unbekannter Typ'})")
+    ext = "." + content_type.split("/")[-1]
+    if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"):
         ext = ".jpg"
+    return r.content, ext
 
+
+def _store_image(item_id: int, content: bytes, ext: str) -> dict:
     filename = f"{uuid.uuid4().hex}{ext}"
     with open(os.path.join(UPLOAD_DIR, filename), "wb") as f:
-        f.write(r.content)
-
+        f.write(content)
+    conn = get_connection()
+    cursor = conn.cursor()
     cursor.execute(
         "SELECT COALESCE(MAX(position), -1) + 1 FROM furniture_images WHERE furniture_id = ?", (item_id,)
     )
@@ -323,8 +328,91 @@ async def upload_image_from_url(item_id: int, body: ImageUrlRequest, _=Depends(v
     conn.commit()
     image_id = cursor.lastrowid
     conn.close()
-
     return {"id": image_id, "filename": filename}
+
+
+@app.post("/furniture/{item_id}/image-url")
+async def upload_image_from_url(item_id: int, body: ImageUrlRequest, _=Depends(verify_token)):
+    conn = get_connection()
+    found = conn.execute("SELECT id FROM furniture WHERE id = ?", (item_id,)).fetchone()
+    conn.close()
+    if not found:
+        raise HTTPException(status_code=404, detail="Item not found")
+    try:
+        content, ext = await _download_image(body.url)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Bild konnte nicht geladen werden: {e}")
+    return _store_image(item_id, content, ext)
+
+
+class PageImport(BaseModel):
+    url: str
+    html: str
+
+
+def _import_reply(status: int, message: str, **extra):
+    # The shortcut shows "message" in a notification, for success and errors alike
+    return JSONResponse(status_code=status, content={"ok": status == 200, "message": message, **extra})
+
+
+@app.post("/import/page")
+async def import_page(body: PageImport, dry_run: bool = False, x_import_key: str | None = Header(default=None)):
+    """Creates an item from a page that the iPad shortcut read in Safari, so the shop is never asked by the backend."""
+    if not IMPORT_KEY:
+        return _import_reply(503, "Der Import ist im Backend nicht eingerichtet (IMPORT_KEY fehlt in backend/.env).")
+    if not x_import_key or not hmac.compare_digest(x_import_key.strip(), IMPORT_KEY):
+        return _import_reply(401, "Falscher Import-Schlüssel. Prüfe den Header X-Import-Key im Kurzbefehl.")
+    if len(body.html) > 20_000_000:
+        return _import_reply(413, "Die Seite ist zu groß.")
+    url = body.url.strip()
+    try:
+        data = scraper.parse_product(body.html, url)
+    except scraper.ScrapeError as e:
+        return _import_reply(422, str(e))
+    if not data["price"] and not data["images"]:
+        return _import_reply(422, "Auf der Seite wurden keine Produktdaten gefunden. Ist das eine Produktseite?")
+    if dry_run:
+        # for testing: show what would be imported, without saving anything
+        return _import_reply(200, f"Test: {data['name']}", data=data)
+
+    item_id = create_furniture(FurnitureItem(
+        name=data["name"], category=data["category"], subcategory=data["subcategory"],
+        location=url, price=data["price"] or 0,
+        length=data["length"], width=data["width"], height=data["height"],
+        tags=data["tags"], colors=data["colors"],
+    ))["id"]
+
+    # download in parallel, store in the original order
+    images = data["images"][:MAX_IMPORT_IMAGES]
+    limit = asyncio.Semaphore(4)
+
+    async def download(img):
+        async with limit:
+            try:
+                return await _download_image(img["url"], referer=url)
+            except Exception as e:
+                log.warning("Bild %s nicht geladen: %s", img["url"], e)
+                return None
+
+    results = await asyncio.gather(*(download(img) for img in images))
+    loaded = 0
+    for img, result in zip(images, results):
+        if result is None:
+            continue
+        saved = _store_image(item_id, *result)
+        loaded += 1
+        if img.get("color"):
+            try:
+                update_image_color(item_id, saved["id"], ImageColorUpdate(color=img["color"]))
+            except HTTPException:
+                pass
+
+    message = f"Importiert: {data['name']} ({loaded} von {len(images)} Bildern)"
+    if images and loaded == 0:
+        message += ". Die Bilder konnten nicht geladen werden, der Bild-Server blockiert vermutlich."
+    elif loaded < len(images):
+        message += ". Einige Bilder fehlen."
+    return _import_reply(200, message, id=item_id, name=data["name"])
 
 
 @app.post("/links/check")

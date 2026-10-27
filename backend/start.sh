@@ -37,11 +37,11 @@ if [ ! -f .env ]; then
     echo "backend/.env fehlt. Kopiere .env.example nach .env und trage Passwort und SECRET_KEY ein."
     exit 1
 fi
-# Only APP_PASSWORD and SECRET_KEY are read, the file itself is never executed
+# Only APP_PASSWORD, SECRET_KEY and IMPORT_KEY are read, the file itself is never executed
 while IFS='=' read -r key value || [ -n "$key" ]; do
     value="${value%$'\r'}"
     case "$key" in
-        APP_PASSWORD|SECRET_KEY)
+        APP_PASSWORD|SECRET_KEY|IMPORT_KEY)
             if [[ "$value" == \"*\" ]]; then
                 value="${value#\"}"
                 value="${value%\"}"
