@@ -1,6 +1,7 @@
 # app/main.py
 
 import hmac
+import json
 import logging
 import os
 import uuid
@@ -12,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import re
 import httpx
 import jwt
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Header
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Header, Request
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
@@ -356,12 +357,20 @@ def _import_reply(status: int, message: str, **extra):
 
 
 @app.post("/import/page")
-async def import_page(body: PageImport, dry_run: bool = False, x_import_key: str | None = Header(default=None)):
+async def import_page(request: Request, dry_run: bool = False, x_import_key: str | None = Header(default=None)):
     """Creates an item from a page that the iPad shortcut read in Safari, so the shop is never asked by the backend."""
     if not IMPORT_KEY:
         return _import_reply(503, "Der Import ist im Backend nicht eingerichtet (IMPORT_KEY fehlt in backend/.env).")
     if not x_import_key or not hmac.compare_digest(x_import_key.strip(), IMPORT_KEY):
         return _import_reply(401, "Falscher Import-Schlüssel. Prüfe den Header X-Import-Key im Kurzbefehl.")
+    # The shortcut may send the JSON as a quoted string (JSON inside a JSON string), so unpack up to twice
+    try:
+        payload = json.loads(await request.body())
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        body = PageImport(**payload)
+    except Exception:
+        return _import_reply(422, "Die Anfrage enthält keine Seite (erwartet: JSON mit url und html). Prüfe den Anfragetext im Kurzbefehl.")
     if len(body.html) > 20_000_000:
         return _import_reply(413, "Die Seite ist zu groß.")
     url = body.url.strip()
