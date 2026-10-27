@@ -45,6 +45,7 @@ CATEGORY_KEYWORDS = [
     ("matratze", "Betten & Matratzen", "Matratzen"),
     ("nachttisch", "Betten & Matratzen", "Nachttische"),
     ("bettwäsche", "Betten & Matratzen", "Bettwäsche"),
+    ("bettbezug", "Betten & Matratzen", "Bettwäsche"),
     ("kopfteil", "Betten & Matratzen", "Kopfteile"),
     ("bett", "Betten & Matratzen", "Betten"),
     ("schreibtisch", "Tische & Schreibtische", "Schreibtische"),
@@ -183,7 +184,7 @@ def _json_ld_nodes(soup: BeautifulSoup) -> list[dict]:
         while stack:
             cur = stack.pop()
             if isinstance(cur, list):
-                stack.extend(cur)
+                stack.extend(reversed(cur))  # keep the order of the page, the first entry is popped first
             elif isinstance(cur, dict):
                 nodes.append(cur)
                 if "@graph" in cur:
@@ -278,6 +279,15 @@ def _dimensions(node: dict) -> tuple[float | None, float | None, float | None]:
             height = v
         elif var == "d" and depth is None:
             depth = v
+
+    if width is None and depth is None and height is None:
+        # Fallback: "44 x 54 x 89 cm" or "100 x 120 cm" in the size or description (Action, Zara Home)
+        for text in (str(node.get("size", "")), desc):
+            m = re.search(r"(\d+(?:[.,]\d+)?)\s*x\s*(\d+(?:[.,]\d+)?)(?:\s*x\s*(\d+(?:[.,]\d+)?))?\s*cm", text.lower())
+            if m:
+                width, depth = (float(g.replace(",", ".")) for g in m.group(1, 2))
+                height = float(m.group(3).replace(",", ".")) if m.group(3) else None
+                break
 
     horizontal = sorted([d for d in (width, depth) if d is not None], reverse=True)
     length = horizontal[0] if horizontal else None
@@ -393,13 +403,31 @@ def parse_product(html: str, url: str) -> dict:
         name = title.get_text(strip=True).split("|")[0].strip() if title else ""
     if not images:
         # large images that the iPad shortcut found on the page
-        images = [img["src"] for img in soup.select("img[data-import-image]") if img.get("src", "").startswith("http")]
+        images = [img["src"] for img in soup.select("img[data-import-image]") if img.get("src", "").startswith("http") and "play-button" not in img["src"]]
     if not images and meta("og:image"):
         images = [meta("og:image")]
+    if not price:
+        # price element that the iPad shortcut picked on the page (Amazon: the page text also holds the cart total)
+        marked = soup.select_one("[data-import-price]")
+        m = re.search(r"(\d{1,3}(?:\.\d{3})*|\d+)[,.](\d{2})\b", marked.get_text()) if marked else None
+        if m:
+            price = float(f"{m.group(1).replace('.', '')}.{m.group(2)}")
     if not price:
         m = re.search(r"(\d{1,5}[.,]\d{2})\s*€|€\s*(\d{1,5}[.,]\d{2})", soup.get_text())
         if m:
             price = float((m.group(1) or m.group(2)).replace(",", "."))
+    if length is None and width is None and height is None:
+        # "47T x 43B x 77,5H cm" (Amazon): depth, width, height. The longer horizontal side is the length.
+        num = r"(\d+(?:[.,]\d+)?)"
+        m = re.search(rf"{num}\s*T\s*x\s*{num}\s*B\s*x\s*{num}\s*H\s*cm", soup.get_text())
+        if m:
+            depth, wide, height = (float(g.replace(",", ".")) for g in m.groups())
+            length, width = max(depth, wide), min(depth, wide)
+    if not colors:
+        # "Farbe: braun" / "Farbe<TAB>Beige, Weiß" in the page text (Otto, Action, Amazon)
+        m = re.search(r"Farbe\s*[:\t]\s*([^\n]{1,60})", soup.get_text())
+        if m:
+            colors = color_to_hex(m.group(1))
     if not colors and name:
         colors = colors_from_title(name)
     if not tags:

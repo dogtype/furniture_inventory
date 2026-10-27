@@ -55,16 +55,37 @@ var esc = function (s) {
 var parts = ["<title>" + esc(document.title) + "</title>"];
 document.querySelectorAll("meta[property], meta[name]").forEach(function (m) { parts.push(m.outerHTML); });
 document.querySelectorAll('script[type="application/ld+json"]').forEach(function (s) { parts.push(s.outerHTML); });
-var h1 = document.querySelector("h1");
-if (h1) parts.push("<h1>" + esc(h1.innerText) + "</h1>");
+var isAmazon = /(^|\.)amazon\./.test(location.hostname);
 var seen = {};
-Array.prototype.forEach.call(document.images, function (img) {
-  var src = img.currentSrc || img.src;
-  if (src && src.indexOf("http") === 0 && !seen[src] && img.naturalWidth >= 400 && img.naturalHeight >= 400) {
+var addImage = function (src) {
+  if (src && src.indexOf("http") === 0 && !seen[src]) {
     seen[src] = true;
     parts.push('<img data-import-image src="' + esc(src) + '">');
   }
+};
+var bigImages = Array.prototype.filter.call(document.images, function (img) {
+  return img.naturalWidth >= 400 && img.naturalHeight >= 400;
 });
+if (isAmazon) {
+  // Amazon: Titel, Preis und Bilder des Produkts, nicht die des Warenkorbs und der Empfehlungen
+  var title = document.getElementById("productTitle");
+  if (title) parts.push("<h1>" + esc(title.innerText.trim()) + "</h1>");
+  var price = document.querySelector(
+    "#corePrice_feature_div .a-offscreen, #corePriceDisplay_desktop_feature_div .a-offscreen, " +
+    "#apex_desktop .a-offscreen, #centerCol .a-price .a-offscreen, #ppd .a-price .a-offscreen");
+  if (price) parts.push("<span data-import-price>" + esc(price.textContent) + "</span>");
+  document.querySelectorAll("#imgTagWrapperId img, #main-image-container img, #altImages img").forEach(function (img) {
+    var src = img.currentSrc || img.src;
+    if (src.indexOf("/images/I/") > -1 && src.indexOf("play-button") < 0) addImage(src.replace(/\._[A-Za-z0-9_,]+_\./, "."));
+  });
+  if (!parts.some(function (p) { return p.indexOf("data-import-image") > -1; }) && bigImages[0]) {
+    addImage(bigImages[0].currentSrc || bigImages[0].src);
+  }
+} else {
+  var h1 = document.querySelector("h1");
+  if (h1) parts.push("<h1>" + esc(h1.innerText.trim()) + "</h1>");
+  bigImages.forEach(function (img) { addImage(img.currentSrc || img.src); });
+}
 parts.push("<div>" + esc((document.body.innerText || "").slice(0, 50000)) + "</div>");
 completion(JSON.stringify({ url: location.href, html: parts.join("\n") }));
 ```
